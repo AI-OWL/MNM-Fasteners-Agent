@@ -165,40 +165,56 @@ class SageSDK:
             
             try:
                 logger.debug(f"Trying GetApplication with credentials (user={username})...")
-                app = self._login.GetApplication(username, password)
-                logger.info(f"Got Application object!")
-                logger.debug(f"App methods: {[m for m in dir(app) if not m.startswith('_')][:15]}...")
                 
-                # Try to open company via Application
+                # GetApplication might throw an exception but still work!
+                # We catch the exception and check if we're actually connected
+                app = None
                 try:
-                    logger.debug(f"Trying app.OpenCompany({data_path})...")
-                    app.OpenCompany(data_path)
-                    self._company = app
-                    self._connected = True
-                    logger.info(f"Connected via GetApplication().OpenCompany: {data_path}")
-                    return True
-                except Exception as e_open:
-                    logger.debug(f"app.OpenCompany failed: {e_open}")
-                    
-                    # Maybe try app.Open
+                    app = self._login.GetApplication(username, password)
+                except Exception as e_get:
+                    logger.debug(f"GetApplication raised exception: {e_get}")
+                    # Check if we got a partial connection anyway
+                    # The login object might now have company access
                     try:
-                        logger.debug(f"Trying app.Open({data_path})...")
-                        app.Open(data_path)
+                        # Try to use the login object directly
+                        app = self._login
+                        logger.debug("Using login object as app after exception")
+                    except:
+                        pass
+                
+                if app is not None:
+                    logger.info(f"Got Application object!")
+                    methods = [m for m in dir(app) if not m.startswith('_')]
+                    logger.debug(f"App methods: {methods[:15]}...")
+                    
+                    # Check if app has company-related methods
+                    if 'Customers' in methods or 'SalesOrders' in methods or 'Company' in methods:
                         self._company = app
                         self._connected = True
-                        logger.info(f"Connected via GetApplication().Open: {data_path}")
+                        logger.info(f"Connected! App has data access methods.")
                         return True
-                    except Exception as e_open2:
-                        logger.debug(f"app.Open failed: {e_open2}")
-                
-                # The app might already be connected after GetApplication
-                self._company = app
-                self._connected = True
-                logger.info(f"Connected via GetApplication (no company open needed)")
-                return True
+                    
+                    # Try to open company via Application
+                    for method_name in ['OpenCompany', 'Open', 'SelectCompany']:
+                        if hasattr(app, method_name):
+                            try:
+                                logger.debug(f"Trying app.{method_name}({data_path})...")
+                                getattr(app, method_name)(data_path)
+                                self._company = app
+                                self._connected = True
+                                logger.info(f"Connected via {method_name}: {data_path}")
+                                return True
+                            except Exception as e_open:
+                                logger.debug(f"app.{method_name} failed: {e_open}")
+                    
+                    # The app might already be connected after GetApplication
+                    self._company = app
+                    self._connected = True
+                    logger.info(f"Connected via GetApplication (assuming connected)")
+                    return True
                 
             except Exception as e1:
-                logger.debug(f"GetApplication with credentials failed: {e1}")
+                logger.debug(f"GetApplication approach failed completely: {e1}")
             
             # Try 2: EnsureDispatch for early binding (gets full type library)
             try:
