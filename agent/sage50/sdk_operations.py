@@ -1,15 +1,15 @@
 """
-Sage 50 SDK (SDO) Operations.
-Automatic import/export using Sage Data Objects COM interface.
+Sage 50 Accounting (US) SDK Operations.
+Uses PeachtreeAccounting COM interface for Sage 50 US versions.
 
 This allows FULLY AUTOMATIC operations - no manual CSV import needed!
 
 Requirements:
-- Sage 50 installed on the machine
+- Sage 50 Accounting installed on the machine (US version)
 - pywin32 installed (pip install pywin32)
 - Sage 50 NOT running (or run as same user)
 
-What SDO Can Do:
+What the SDK Can Do:
 - Create sales orders automatically
 - Create/update customers
 - Read all orders, products, customers
@@ -38,9 +38,10 @@ class SageSDKError(Exception):
 
 class SageSDK:
     """
-    Direct Sage 50 SDK (SDO) interface.
+    Direct Sage 50 Accounting (US/Peachtree) interface.
     
     This provides AUTOMATIC operations - no manual import/export needed.
+    Uses PeachtreeAccounting.Login COM object.
     
     Usage:
         sdk = SageSDK(config)
@@ -55,20 +56,28 @@ class SageSDK:
         sdk.disconnect()
     """
     
-    # SDO ProgIDs to try (different Sage versions)
+    # Peachtree ProgIDs to try (different versions)
+    PEACHTREE_PROGIDS = [
+        "PeachtreeAccounting.Login.31",   # 2024 (v31)
+        "PeachtreeAccounting.Login.30",   # 2023 (v30)
+        "PeachtreeAccounting.Login.29",   # 2022 (v29)
+        "PeachtreeAccounting.Login",      # Default/latest
+    ]
+    
+    # Legacy SDO ProgIDs (for UK Sage 50 Accounts)
     SDO_PROGIDS = [
         "SageDataObject50.SDOEngine",
-        "SageDataObject50v29.SDOEngine",  # 2024
-        "SageDataObject50v28.SDOEngine",  # 2023
-        "SageDataObject50v27.SDOEngine",  # 2022
+        "SageDataObject50v29.SDOEngine",
+        "SageDataObject50v28.SDOEngine",
     ]
     
     def __init__(self, config: AgentConfig):
         self.config = config
-        self._engine = None
-        self._workspace = None
+        self._login = None
+        self._company = None
         self._connected = False
         self._com_initialized = False
+        self._api_type = None  # "peachtree" or "sdo"
     
     @property
     def is_connected(self) -> bool:
@@ -83,13 +92,17 @@ class SageSDK:
     def _cleanup_com(self):
         """Cleanup COM."""
         if self._com_initialized:
-            pythoncom.CoUninitialize()
+            try:
+                pythoncom.CoUninitialize()
+            except:
+                pass
             self._com_initialized = False
     
     def connect(self) -> bool:
         """
         Connect to Sage 50 via SDK.
         
+        Tries Peachtree (US) first, then SDO (UK) if that fails.
         Note: Sage 50 should NOT be running, or must be run as same user.
         """
         if not HAS_COM:
@@ -97,21 +110,35 @@ class SageSDK:
         
         self._init_com()
         
-        # Try different ProgIDs
-        for prog_id in self.SDO_PROGIDS:
+        # Try Peachtree (US) first
+        for prog_id in self.PEACHTREE_PROGIDS:
             try:
-                logger.info(f"Trying Sage SDK: {prog_id}")
-                self._engine = win32com.client.Dispatch(prog_id)
+                logger.info(f"Trying Peachtree: {prog_id}")
+                self._login = win32com.client.Dispatch(prog_id)
+                self._api_type = "peachtree"
                 logger.info(f"Successfully created: {prog_id}")
                 break
             except Exception as e:
                 logger.debug(f"Failed {prog_id}: {e}")
                 continue
         
-        if not self._engine:
+        # If Peachtree failed, try SDO (UK)
+        if not self._login:
+            for prog_id in self.SDO_PROGIDS:
+                try:
+                    logger.info(f"Trying SDO: {prog_id}")
+                    self._login = win32com.client.Dispatch(prog_id)
+                    self._api_type = "sdo"
+                    logger.info(f"Successfully created: {prog_id}")
+                    break
+                except Exception as e:
+                    logger.debug(f"Failed {prog_id}: {e}")
+                    continue
+        
+        if not self._login:
             raise SageSDKError(
                 "Could not create Sage SDK object. "
-                "Make sure Sage 50 is installed."
+                "Make sure Sage 50 is installed and closed."
             )
         
         # Connect to company data
@@ -120,10 +147,41 @@ class SageSDK:
             raise SageSDKError("SAGE_COMPANY_PATH not configured")
         
         try:
-            # Create workspace and connect
-            self._workspace = self._engine.Workspaces.Add("MNMAgent")
+            if self._api_type == "peachtree":
+                return self._connect_peachtree(data_path)
+            else:
+                return self._connect_sdo(data_path)
+        except Exception as e:
+            raise SageSDKError(f"Failed to connect to Sage: {e}")
+    
+    def _connect_peachtree(self, data_path: str) -> bool:
+        """Connect using Peachtree API (US)."""
+        try:
+            # Open company
+            logger.info(f"Opening Peachtree company: {data_path}")
             
-            self._workspace.Connect(
+            # The Open method takes the company path
+            self._company = self._login.Open(
+                data_path,
+                self.config.sage50_username or "",
+                self.config.sage50_password or ""
+            )
+            
+            self._connected = True
+            logger.info(f"Connected to Sage 50 via Peachtree API: {data_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Peachtree connection failed: {e}")
+            raise SageSDKError(f"Failed to open company: {e}")
+    
+    def _connect_sdo(self, data_path: str) -> bool:
+        """Connect using SDO API (UK)."""
+        try:
+            # Create workspace and connect
+            self._company = self._login.Workspaces.Add("MNMAgent")
+            
+            self._company.Connect(
                 data_path,
                 self.config.sage50_username or "",
                 self.config.sage50_password or "",
@@ -131,20 +189,32 @@ class SageSDK:
             )
             
             self._connected = True
-            logger.info(f"Connected to Sage 50 via SDK: {data_path}")
-            
+            logger.info(f"Connected to Sage 50 via SDO: {data_path}")
             return True
             
         except Exception as e:
-            raise SageSDKError(f"Failed to connect to Sage: {e}")
+            logger.error(f"SDO connection failed: {e}")
+            raise SageSDKError(f"Failed to connect: {e}")
     
     def disconnect(self):
         """Disconnect from Sage."""
         try:
-            if self._workspace:
-                self._workspace.Disconnect()
-                self._workspace = None
-            self._engine = None
+            if self._api_type == "peachtree":
+                if self._company:
+                    try:
+                        self._company.Close()
+                    except:
+                        pass
+                    self._company = None
+            else:  # sdo
+                if self._company:
+                    try:
+                        self._company.Disconnect()
+                    except:
+                        pass
+                    self._company = None
+            
+            self._login = None
             self._connected = False
             logger.info("Disconnected from Sage SDK")
         except Exception as e:
@@ -160,16 +230,58 @@ class SageSDK:
         
         Returns orders where:
         - Order status is not Complete
-        - Items not fully despatched
+        - Items not fully shipped
         """
         if not self._connected:
             raise SageSDKError("Not connected to Sage")
         
+        if self._api_type == "peachtree":
+            return self._get_unshipped_orders_peachtree()
+        else:
+            return self._get_unshipped_orders_sdo()
+    
+    def _get_unshipped_orders_peachtree(self) -> list[Order]:
+        """Get unshipped orders using Peachtree API (US)."""
+        orders = []
+        
+        try:
+            sales_orders = self._company.SalesOrders
+            
+            for so in sales_orders:
+                try:
+                    # Check if order is not fully shipped
+                    # In Peachtree, we check if any line has unshipped quantity
+                    is_unshipped = False
+                    
+                    for line in so.Lines:
+                        qty_ordered = getattr(line, 'Quantity', 0) or 0
+                        qty_shipped = getattr(line, 'QuantityShipped', 0) or 0
+                        if qty_ordered > qty_shipped:
+                            is_unshipped = True
+                            break
+                    
+                    if is_unshipped:
+                        order = self._parse_sales_order_peachtree(so)
+                        orders.append(order)
+                        
+                except Exception as e:
+                    logger.debug(f"Error parsing order: {e}")
+                    continue
+            
+            logger.info(f"Found {len(orders)} unshipped orders via Peachtree")
+            return orders
+            
+        except Exception as e:
+            logger.error(f"Error reading orders: {e}")
+            raise SageSDKError(f"Failed to read orders: {e}")
+    
+    def _get_unshipped_orders_sdo(self) -> list[Order]:
+        """Get unshipped orders using SDO API (UK)."""
         orders = []
         
         try:
             # Get SalesOrder record set
-            sales_orders = self._workspace.CreateObject("SalesOrder")
+            sales_orders = self._company.CreateObject("SalesOrder")
             
             # Find all orders
             sales_orders.FindFirst()
@@ -181,20 +293,58 @@ class SageSDK:
                 
                 # Status 2 = Complete, DespatchStatus 2 = Fully Despatched
                 if status != 2 and despatch_status != 2:
-                    order = self._parse_sales_order(sales_orders)
+                    order = self._parse_sales_order_sdo(sales_orders)
                     orders.append(order)
                 
                 sales_orders.FindNext()
             
-            logger.info(f"Found {len(orders)} unshipped orders via SDK")
+            logger.info(f"Found {len(orders)} unshipped orders via SDO")
             return orders
             
         except Exception as e:
             logger.error(f"Error reading orders: {e}")
             raise SageSDKError(f"Failed to read orders: {e}")
     
-    def _parse_sales_order(self, record) -> Order:
-        """Parse a SalesOrder record into Order model."""
+    def _parse_sales_order_peachtree(self, record) -> Order:
+        """Parse a Peachtree SalesOrder into Order model."""
+        order = Order(
+            sage_order_ref=str(getattr(record, 'ReferenceNumber', '') or ''),
+            order_date=getattr(record, 'Date', None) or datetime.now(),
+            customer_name=getattr(record, 'ShipToName', '') or '',
+            
+            ship_name=getattr(record, 'ShipToName', '') or '',
+            ship_address_1=getattr(record, 'ShipToAddress1', '') or '',
+            ship_address_2=getattr(record, 'ShipToAddress2', '') or '',
+            ship_city=getattr(record, 'ShipToCity', '') or '',
+            ship_state=getattr(record, 'ShipToState', '') or '',
+            ship_postcode=getattr(record, 'ShipToZip', '') or '',
+            
+            source_platform=Platform.SAGE_QUANTUM,
+        )
+        
+        # Calculate totals and get lines
+        total = 0.0
+        try:
+            for line_item in record.Lines:
+                qty = float(getattr(line_item, 'Quantity', 0) or 0)
+                price = float(getattr(line_item, 'UnitPrice', 0) or 0)
+                total += qty * price
+                
+                line = OrderLine(
+                    sku=getattr(line_item, 'ItemID', '') or '',
+                    description=getattr(line_item, 'Description', '') or '',
+                    quantity=int(qty),
+                    unit_price=price,
+                )
+                order.lines.append(line)
+        except Exception:
+            pass
+        
+        order.total = total
+        return order
+    
+    def _parse_sales_order_sdo(self, record) -> Order:
+        """Parse a SDO SalesOrder record into Order model."""
         # Get basic fields
         order = Order(
             sage_order_ref=str(getattr(record, 'OrderNumber', '')),
@@ -253,13 +403,89 @@ class SageSDK:
         if not self._connected:
             raise SageSDKError("Not connected to Sage")
         
+        if self._api_type == "peachtree":
+            return self._create_sales_order_peachtree(order)
+        else:
+            return self._create_sales_order_sdo(order)
+    
+    def _create_sales_order_peachtree(self, order: Order) -> dict:
+        """Create sales order using Peachtree API (US)."""
+        try:
+            platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
+            platform = str(order.source_platform).replace("Platform.", "")
+            
+            # Get or create customer
+            customer_id = self._get_or_create_customer_peachtree(order)
+            
+            # Create sales order
+            sales_orders = self._company.SalesOrders
+            new_order = sales_orders.Add()
+            
+            # Set customer
+            new_order.CustomerID = customer_id
+            
+            # Set addresses
+            new_order.ShipToName = order.customer_name[:40] if order.customer_name else ""
+            new_order.ShipToAddress1 = (order.ship_address_1 or "")[:40]
+            new_order.ShipToAddress2 = (order.ship_address_2 or "")[:40]
+            new_order.ShipToCity = (order.ship_city or "")[:25]
+            new_order.ShipToState = (order.ship_state or "")[:2]
+            new_order.ShipToZip = (order.ship_postcode or "")[:12]
+            
+            # Set date
+            new_order.Date = order.order_date
+            
+            # Set reference (platform order ID)
+            if platform_id:
+                new_order.CustomerPurchaseOrder = f"{platform}:{platform_id}"[:20]
+            
+            # Add line items
+            for line in order.lines:
+                order_line = new_order.Lines.Add()
+                order_line.ItemID = line.sku[:20] if line.sku else ""
+                order_line.Description = line.description[:160] if line.description else ""
+                order_line.Quantity = line.quantity
+                order_line.UnitPrice = line.unit_price
+            
+            # Add shipping as line item if present
+            if order.shipping_cost > 0:
+                ship_line = new_order.Lines.Add()
+                ship_line.ItemID = "SHIPPING"
+                ship_line.Description = "Shipping & Handling"
+                ship_line.Quantity = 1
+                ship_line.UnitPrice = order.shipping_cost
+            
+            # Save
+            new_order.Save()
+            
+            # Get order number
+            sage_order_ref = str(new_order.ReferenceNumber) if hasattr(new_order, 'ReferenceNumber') else "NEW"
+            
+            logger.info(f"Created Sage order {sage_order_ref} for {platform_id}")
+            
+            return {
+                "success": True,
+                "sage_order_ref": sage_order_ref,
+                "platform_order_id": platform_id,
+                "message": "Order created automatically in Sage (Peachtree)",
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to create order (Peachtree): {e}")
+            raise SageSDKError(f"Failed to create order: {e}")
+    
+    def _create_sales_order_sdo(self, order: Order) -> dict:
+        """Create sales order using SDO API (UK)."""
         try:
             # Create new SalesOrder record
-            sales_order = self._workspace.CreateObject("SalesOrder")
+            sales_order = self._company.CreateObject("SalesOrder")
             sales_order.AddNew()
             
             # Get or create customer account
-            account_ref = self._get_or_create_customer_account(order)
+            account_ref = self._get_or_create_customer_sdo(order)
+            
+            platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
+            platform = str(order.source_platform).replace("Platform.", "")
             
             # Set header fields
             sales_order.Fields("ACCOUNT_REF").Value = account_ref
@@ -275,9 +501,6 @@ class SageSDK:
                 sales_order.Fields("TELEPHONE").Value = order.customer_phone[:30]
             
             # Store platform reference in notes
-            platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
-            platform = str(order.source_platform).replace("Platform.", "")
-            
             if platform_id:
                 sales_order.Fields("NOTES_1").Value = f"{platform}: {platform_id}"[:60]
             
@@ -312,15 +535,64 @@ class SageSDK:
                 "success": True,
                 "sage_order_ref": sage_order_ref,
                 "platform_order_id": platform_id,
-                "message": "Order created automatically in Sage",
+                "message": "Order created automatically in Sage (SDO)",
             }
             
         except Exception as e:
-            logger.error(f"Failed to create order: {e}")
+            logger.error(f"Failed to create order (SDO): {e}")
             raise SageSDKError(f"Failed to create order: {e}")
     
-    def _get_or_create_customer_account(self, order: Order) -> str:
-        """Get existing customer account or create new one."""
+    def _get_or_create_customer_peachtree(self, order: Order) -> str:
+        """Get or create customer using Peachtree API (US)."""
+        # Generate customer ID from name
+        name = order.customer_name or "CUSTOMER"
+        customer_id = name[:14].upper().replace(" ", "")
+        
+        # Add platform prefix
+        if order.amazon_order_id:
+            customer_id = "AMZ-" + customer_id[:10]
+        elif order.ebay_order_id:
+            customer_id = "EBY-" + customer_id[:10]
+        elif order.shopify_order_id:
+            customer_id = "SHP-" + customer_id[:10]
+        
+        # Check if customer exists
+        try:
+            customers = self._company.Customers
+            existing = customers.Find(customer_id)
+            if existing:
+                return customer_id
+        except Exception:
+            pass
+        
+        # Create new customer
+        try:
+            customers = self._company.Customers
+            new_customer = customers.Add()
+            
+            new_customer.ID = customer_id
+            new_customer.Name = order.customer_name[:40] if order.customer_name else ""
+            new_customer.BillToAddress1 = (order.ship_address_1 or "")[:40]
+            new_customer.BillToAddress2 = (order.ship_address_2 or "")[:40]
+            new_customer.BillToCity = (order.ship_city or "")[:25]
+            new_customer.BillToState = (order.ship_state or "")[:2]
+            new_customer.BillToZip = (order.ship_postcode or "")[:12]
+            
+            if order.customer_email:
+                new_customer.Email = order.customer_email[:50]
+            if order.customer_phone:
+                new_customer.Telephone1 = order.customer_phone[:20]
+            
+            new_customer.Save()
+            logger.info(f"Created customer: {customer_id}")
+            
+        except Exception as e:
+            logger.warning(f"Could not create customer: {e}")
+        
+        return customer_id
+    
+    def _get_or_create_customer_sdo(self, order: Order) -> str:
+        """Get or create customer using SDO API (UK)."""
         # Generate account ref from customer name
         name = order.customer_name or "CUSTOMER"
         account_ref = name[:8].upper().replace(" ", "")
@@ -335,7 +607,7 @@ class SageSDK:
         
         # Check if exists
         try:
-            customer = self._workspace.CreateObject("SalesRecord")
+            customer = self._company.CreateObject("SalesRecord")
             if customer.Find("ACCOUNT_REF", account_ref):
                 return account_ref
         except Exception:
@@ -343,7 +615,7 @@ class SageSDK:
         
         # Create new customer
         try:
-            customer = self._workspace.CreateObject("SalesRecord")
+            customer = self._company.CreateObject("SalesRecord")
             customer.AddNew()
             
             customer.Fields("ACCOUNT_REF").Value = account_ref
