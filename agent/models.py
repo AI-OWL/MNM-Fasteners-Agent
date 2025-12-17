@@ -347,6 +347,41 @@ class Product(BaseModel):
     category: Optional[str] = None
 
 
+class Customer(BaseModel):
+    """Customer data for Sage 50."""
+    
+    # Core identifiers
+    customer_id: Optional[str] = None
+    account_ref: Optional[str] = None  # Sage account reference
+    
+    # Contact info
+    name: str
+    company: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    
+    # Billing address
+    billing_address_1: Optional[str] = None
+    billing_address_2: Optional[str] = None
+    billing_city: Optional[str] = None
+    billing_state: Optional[str] = None
+    billing_postcode: Optional[str] = None
+    billing_country: Optional[str] = None
+    
+    # Shipping address
+    shipping_address_1: Optional[str] = None
+    shipping_address_2: Optional[str] = None
+    shipping_city: Optional[str] = None
+    shipping_state: Optional[str] = None
+    shipping_postcode: Optional[str] = None
+    shipping_country: Optional[str] = None
+    
+    # Platform identifiers
+    amazon_customer_id: Optional[str] = None
+    ebay_buyer_id: Optional[str] = None
+    shopify_customer_id: Optional[str] = None
+
+
 class SpreadsheetData(BaseModel):
     """Represents spreadsheet data for transformation."""
     
