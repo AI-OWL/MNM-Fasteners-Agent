@@ -157,20 +157,79 @@ class SageSDK:
     def _connect_peachtree(self, data_path: str) -> bool:
         """Connect using Peachtree API (US)."""
         try:
-            # Open company
+            # Open company - try multiple approaches
             logger.info(f"Opening Peachtree company: {data_path}")
             
-            # The Open method takes the company path
-            self._company = self._login.Open(
-                data_path,
-                self.config.sage50_username or "",
-                self.config.sage50_password or ""
+            # Try 1: SelectCompany then Open (common pattern)
+            try:
+                logger.debug("Trying SelectCompany approach...")
+                self._login.SelectCompany(data_path)
+                self._company = self._login
+                self._connected = True
+                logger.info(f"Connected via SelectCompany: {data_path}")
+                return True
+            except Exception as e1:
+                logger.debug(f"SelectCompany failed: {e1}")
+            
+            # Try 2: Open with just path
+            try:
+                logger.debug("Trying Open(path) approach...")
+                self._company = self._login.Open(data_path)
+                self._connected = True
+                logger.info(f"Connected via Open(path): {data_path}")
+                return True
+            except Exception as e2:
+                logger.debug(f"Open(path) failed: {e2}")
+            
+            # Try 3: Open with path and credentials
+            try:
+                logger.debug("Trying Open(path, user, pass) approach...")
+                self._company = self._login.Open(
+                    data_path,
+                    self.config.sage50_username or "",
+                    self.config.sage50_password or ""
+                )
+                self._connected = True
+                logger.info(f"Connected via Open(path, user, pass): {data_path}")
+                return True
+            except Exception as e3:
+                logger.debug(f"Open(path, user, pass) failed: {e3}")
+            
+            # Try 4: OpenCompany method
+            try:
+                logger.debug("Trying OpenCompany approach...")
+                self._login.OpenCompany(data_path)
+                self._company = self._login
+                self._connected = True
+                logger.info(f"Connected via OpenCompany: {data_path}")
+                return True
+            except Exception as e4:
+                logger.debug(f"OpenCompany failed: {e4}")
+            
+            # Try 5: Use LoginSelector to pick company
+            try:
+                logger.debug("Trying LoginSelector approach...")
+                selector = win32com.client.Dispatch("PeachtreeAccounting.LoginSelector")
+                selector.CompanyPath = data_path
+                self._login = selector.GetLogin()
+                self._company = self._login
+                self._connected = True
+                logger.info(f"Connected via LoginSelector: {data_path}")
+                return True
+            except Exception as e5:
+                logger.debug(f"LoginSelector failed: {e5}")
+            
+            raise SageSDKError(
+                f"Could not open Peachtree company. Tried multiple methods.\n"
+                f"Path: {data_path}\n"
+                f"Make sure:\n"
+                f"  1. Sage 50 is completely closed\n"
+                f"  2. The path points to the company data folder\n"
+                f"  3. You have permissions to access the folder"
             )
             
-            self._connected = True
-            logger.info(f"Connected to Sage 50 via Peachtree API: {data_path}")
-            return True
-            
+        except SageSDKError:
+            raise
         except Exception as e:
             logger.error(f"Peachtree connection failed: {e}")
             raise SageSDKError(f"Failed to open company: {e}")
