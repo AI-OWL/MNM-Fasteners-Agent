@@ -1,0 +1,8 @@
+# Server-side dependencies (for the backend API)
+fastapi>=0.109.0
+uvicorn>=0.25.0
+websockets>=12.0
+pyjwt>=2.8.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
