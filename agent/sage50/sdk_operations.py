@@ -159,14 +159,19 @@ class SageSDK:
         try:
             logger.info(f"Opening Peachtree company: {data_path}")
             
-            # Try 1: GetApplication() to get the real API
+            # Try 1: GetApplication() with credentials - THIS IS THE KEY!
+            username = self.config.sage50_username or ""
+            password = self.config.sage50_password or ""
+            
             try:
-                logger.debug("Trying GetApplication approach...")
-                app = self._login.GetApplication()
-                logger.debug(f"Got Application, methods: {[m for m in dir(app) if not m.startswith('_')][:10]}...")
+                logger.debug(f"Trying GetApplication with credentials (user={username})...")
+                app = self._login.GetApplication(username, password)
+                logger.info(f"Got Application object!")
+                logger.debug(f"App methods: {[m for m in dir(app) if not m.startswith('_')][:15]}...")
                 
                 # Try to open company via Application
                 try:
+                    logger.debug(f"Trying app.OpenCompany({data_path})...")
                     app.OpenCompany(data_path)
                     self._company = app
                     self._connected = True
@@ -174,15 +179,26 @@ class SageSDK:
                     return True
                 except Exception as e_open:
                     logger.debug(f"app.OpenCompany failed: {e_open}")
+                    
+                    # Maybe try app.Open
+                    try:
+                        logger.debug(f"Trying app.Open({data_path})...")
+                        app.Open(data_path)
+                        self._company = app
+                        self._connected = True
+                        logger.info(f"Connected via GetApplication().Open: {data_path}")
+                        return True
+                    except Exception as e_open2:
+                        logger.debug(f"app.Open failed: {e_open2}")
                 
-                # Maybe app itself has the company already?
+                # The app might already be connected after GetApplication
                 self._company = app
                 self._connected = True
-                logger.info(f"Connected via GetApplication: {data_path}")
+                logger.info(f"Connected via GetApplication (no company open needed)")
                 return True
                 
             except Exception as e1:
-                logger.debug(f"GetApplication failed: {e1}")
+                logger.debug(f"GetApplication with credentials failed: {e1}")
             
             # Try 2: EnsureDispatch for early binding (gets full type library)
             try:
