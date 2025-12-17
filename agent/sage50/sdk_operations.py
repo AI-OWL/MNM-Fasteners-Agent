@@ -157,74 +157,101 @@ class SageSDK:
     def _connect_peachtree(self, data_path: str) -> bool:
         """Connect using Peachtree API (US)."""
         try:
-            # Open company - try multiple approaches
             logger.info(f"Opening Peachtree company: {data_path}")
             
-            # Try 1: SelectCompany then Open (common pattern)
+            # Try 1: GetApplication() to get the real API
             try:
-                logger.debug("Trying SelectCompany approach...")
-                self._login.SelectCompany(data_path)
-                self._company = self._login
+                logger.debug("Trying GetApplication approach...")
+                app = self._login.GetApplication()
+                logger.debug(f"Got Application, methods: {[m for m in dir(app) if not m.startswith('_')][:10]}...")
+                
+                # Try to open company via Application
+                try:
+                    app.OpenCompany(data_path)
+                    self._company = app
+                    self._connected = True
+                    logger.info(f"Connected via GetApplication().OpenCompany: {data_path}")
+                    return True
+                except Exception as e_open:
+                    logger.debug(f"app.OpenCompany failed: {e_open}")
+                
+                # Maybe app itself has the company already?
+                self._company = app
                 self._connected = True
-                logger.info(f"Connected via SelectCompany: {data_path}")
+                logger.info(f"Connected via GetApplication: {data_path}")
                 return True
+                
             except Exception as e1:
-                logger.debug(f"SelectCompany failed: {e1}")
+                logger.debug(f"GetApplication failed: {e1}")
             
-            # Try 2: Open with just path
+            # Try 2: EnsureDispatch for early binding (gets full type library)
             try:
-                logger.debug("Trying Open(path) approach...")
-                self._company = self._login.Open(data_path)
-                self._connected = True
-                logger.info(f"Connected via Open(path): {data_path}")
-                return True
+                logger.debug("Trying EnsureDispatch (early binding)...")
+                self._login = win32com.client.gencache.EnsureDispatch("PeachtreeAccounting.Login.31")
+                methods = [m for m in dir(self._login) if not m.startswith('_')]
+                logger.debug(f"EnsureDispatch methods: {methods[:15]}...")
+                
+                # Try Open method
+                if hasattr(self._login, 'Open'):
+                    self._company = self._login.Open(data_path)
+                    self._connected = True
+                    logger.info(f"Connected via EnsureDispatch.Open: {data_path}")
+                    return True
+                    
             except Exception as e2:
-                logger.debug(f"Open(path) failed: {e2}")
+                logger.debug(f"EnsureDispatch failed: {e2}")
             
-            # Try 3: Open with path and credentials
+            # Try 3: Invoke method directly (late binding workaround)
             try:
-                logger.debug("Trying Open(path, user, pass) approach...")
-                self._company = self._login.Open(
-                    data_path,
-                    self.config.sage50_username or "",
-                    self.config.sage50_password or ""
-                )
-                self._connected = True
-                logger.info(f"Connected via Open(path, user, pass): {data_path}")
-                return True
+                logger.debug("Trying Invoke approach...")
+                # Invoke(name, PAKID, PAKID, ...)
+                result = self._login.Invoke("Open", data_path)
+                if result:
+                    self._company = result
+                    self._connected = True
+                    logger.info(f"Connected via Invoke: {data_path}")
+                    return True
             except Exception as e3:
-                logger.debug(f"Open(path, user, pass) failed: {e3}")
+                logger.debug(f"Invoke failed: {e3}")
             
-            # Try 4: OpenCompany method
+            # Try 4: Use LoginSelector.GetLogin()
             try:
-                logger.debug("Trying OpenCompany approach...")
-                self._login.OpenCompany(data_path)
-                self._company = self._login
-                self._connected = True
-                logger.info(f"Connected via OpenCompany: {data_path}")
-                return True
-            except Exception as e4:
-                logger.debug(f"OpenCompany failed: {e4}")
-            
-            # Try 5: Use LoginSelector to pick company
-            try:
-                logger.debug("Trying LoginSelector approach...")
+                logger.debug("Trying LoginSelector.GetLogin approach...")
                 selector = win32com.client.Dispatch("PeachtreeAccounting.LoginSelector")
-                selector.CompanyPath = data_path
-                self._login = selector.GetLogin()
-                self._company = self._login
+                methods = [m for m in dir(selector) if not m.startswith('_')]
+                logger.debug(f"LoginSelector methods: {methods}")
+                
+                # Try to get login from selector
+                login = selector.GetLogin()
+                if login:
+                    self._login = login
+                    app = login.GetApplication()
+                    self._company = app
+                    self._connected = True
+                    logger.info(f"Connected via LoginSelector.GetLogin: {data_path}")
+                    return True
+            except Exception as e4:
+                logger.debug(f"LoginSelector.GetLogin failed: {e4}")
+            
+            # Try 5: ptWEB12.PeachtreeStorageAdapter
+            try:
+                logger.debug("Trying PeachtreeStorageAdapter approach...")
+                adapter = win32com.client.Dispatch("ptWEB12.PeachtreeStorageAdapter")
+                methods = [m for m in dir(adapter) if not m.startswith('_')]
+                logger.debug(f"StorageAdapter methods: {methods}")
+                self._company = adapter
                 self._connected = True
-                logger.info(f"Connected via LoginSelector: {data_path}")
+                logger.info(f"Connected via StorageAdapter")
                 return True
             except Exception as e5:
-                logger.debug(f"LoginSelector failed: {e5}")
+                logger.debug(f"StorageAdapter failed: {e5}")
             
             raise SageSDKError(
                 f"Could not open Peachtree company. Tried multiple methods.\n"
                 f"Path: {data_path}\n"
                 f"Make sure:\n"
                 f"  1. Sage 50 is completely closed\n"
-                f"  2. The path points to the company data folder\n"
+                f"  2. You've opened this company in Sage at least once\n"
                 f"  3. You have permissions to access the folder"
             )
             
