@@ -1,4 +1,4 @@
-"""
+r"""
 Sage 50 Quantum Connector (UK Version).
 Handles connection to Sage 50 Accounts via ODBC or SDO (COM).
 
@@ -56,7 +56,7 @@ class Sage50OperationError(Sage50Error):
 
 
 class Sage50Connector:
-    """
+    r"""
     Manages connection to Sage 50 Quantum (UK).
     
     Connection Methods:

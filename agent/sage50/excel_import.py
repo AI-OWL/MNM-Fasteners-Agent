@@ -114,7 +114,118 @@ def read_orders_from_file(filepath: Path) -> list[Order]:
 
 
 def parse_row_to_order(row: dict) -> Order:
-    """Parse a row dict into an Order object."""
+    """
+    Parse a row dict into an Order object.
+    
+    Supports two formats:
+    1. Amazon Invoice Report format (actual production data)
+    2. Simple test format (for sample data)
+    """
+    
+    # === DETECT FORMAT ===
+    # Amazon invoice format uses "E-Commerce Order#" and "Customer ID"
+    # Simple format uses "Platform" and "Order ID"
+    is_amazon_format = 'E-Commerce Order#' in row or 'Customer ID' in row
+    
+    if is_amazon_format:
+        return parse_amazon_invoice_row(row)
+    else:
+        return parse_simple_row(row)
+
+
+def parse_amazon_invoice_row(row: dict) -> Order:
+    """
+    Parse Amazon Invoice Report format.
+    
+    Columns:
+    - Date of Order, E-Commerce Order#, Sales Order#, Ship Date, Amount, Qty
+    - Unit of Measure, Unit Price, Item ID, Sales Order Proposal, Customer ID
+    - Ship to Name, Address Line 1, Address Line 2, City, State, Zipcode
+    - Receivable amount, # of Line Items Ordered, GL Amount, Tax Type
+    - U/M Stocking, Account Receivable Amount, Sales Tax ID, Description
+    - Ship Via, Customer Phone #
+    """
+    
+    # Determine platform from Customer ID column (e.g. "Amazon", "eBay")
+    customer_id = str(row.get('Customer ID', '')).lower()
+    ecommerce_order = str(row.get('E-Commerce Order#', ''))
+    
+    if 'amazon' in customer_id:
+        source_platform = Platform.AMAZON
+        amazon_id = ecommerce_order
+        ebay_id = None
+        shopify_id = None
+    elif 'ebay' in customer_id:
+        source_platform = Platform.EBAY
+        amazon_id = None
+        ebay_id = ecommerce_order
+        shopify_id = None
+    elif 'shopify' in customer_id:
+        source_platform = Platform.SHOPIFY
+        amazon_id = None
+        ebay_id = None
+        shopify_id = ecommerce_order
+    else:
+        source_platform = Platform.SAGE_QUANTUM
+        amazon_id = ebay_id = shopify_id = None
+    
+    # Parse order date (format: MM/DD/YYYY or YYYY-MM-DD)
+    date_str = row.get('Date of Order', '')
+    order_date = parse_date(date_str)
+    
+    # Parse ship date if present
+    ship_date_str = row.get('Ship Date', '')
+    ship_date = parse_date(ship_date_str) if ship_date_str else None
+    
+    # Get Sage Sales Order # if already assigned
+    sage_order_ref = str(row.get('Sales Order#', '')) if row.get('Sales Order#') else None
+    
+    # Parse amounts
+    total_amount = safe_float(row.get('Amount', 0))
+    unit_price = safe_float(row.get('Unit Price', 0))
+    quantity = safe_int(row.get('Qty', 1))
+    
+    # Build address (handle potential NaN values)
+    address_1 = safe_str(row.get('Address Line 1', ''))
+    address_2 = safe_str(row.get('Address Line 2', ''))
+    city = safe_str(row.get('City', ''))
+    state = safe_str(row.get('State', ''))
+    zipcode = safe_str(row.get('Zipcode', ''))
+    
+    # Create order
+    order = Order(
+        amazon_order_id=amazon_id,
+        ebay_order_id=ebay_id,
+        shopify_order_id=shopify_id,
+        sage_order_ref=sage_order_ref,
+        order_date=order_date,
+        ship_date=ship_date,
+        customer_name=safe_str(row.get('Ship to Name', '')),
+        customer_phone=safe_str(row.get('Customer Phone #', '')),
+        ship_address_1=address_1,
+        ship_address_2=address_2,
+        ship_city=city,
+        ship_state=state,
+        ship_postcode=zipcode,
+        ship_method=safe_str(row.get('Ship Via', '')),
+        total=total_amount,
+        source_platform=source_platform,
+        lines=[
+            OrderLine(
+                sku=safe_str(row.get('Item ID', '')),
+                description=safe_str(row.get('Description', '')),
+                quantity=quantity,
+                unit_price=unit_price,
+                unit_of_measure=safe_str(row.get('Unit of Measure', 'each')),
+            )
+        ]
+    )
+    
+    return order
+
+
+def parse_simple_row(row: dict) -> Order:
+    """Parse simple test format (Platform, Order ID, etc.)."""
     
     # Determine platform
     platform_str = str(row.get('Platform', '')).lower()
@@ -138,14 +249,7 @@ def parse_row_to_order(row: dict) -> Order:
         amazon_id = ebay_id = shopify_id = None
     
     # Parse date
-    date_str = row.get('Order Date', '')
-    try:
-        if isinstance(date_str, str):
-            order_date = datetime.strptime(date_str, '%Y-%m-%d')
-        else:
-            order_date = date_str if date_str else datetime.now()
-    except:
-        order_date = datetime.now()
+    order_date = parse_date(row.get('Order Date', ''))
     
     # Create order
     order = Order(
@@ -158,20 +262,81 @@ def parse_row_to_order(row: dict) -> Order:
         ship_address_1=str(row.get('Address 1', '')),
         ship_city=str(row.get('City', '')),
         ship_postcode=str(row.get('Postcode', '')),
-        shipping_cost=float(row.get('Shipping', 0) or 0),
-        total=float(row.get('Total', 0) or 0),
+        shipping_cost=safe_float(row.get('Shipping', 0)),
+        total=safe_float(row.get('Total', 0)),
         source_platform=source_platform,
         lines=[
             OrderLine(
                 sku=str(row.get('SKU', '')),
                 description=str(row.get('Description', '')),
-                quantity=int(row.get('Quantity', 1) or 1),
-                unit_price=float(row.get('Unit Price', 0) or 0),
+                quantity=safe_int(row.get('Quantity', 1)),
+                unit_price=safe_float(row.get('Unit Price', 0)),
             )
         ]
     )
     
     return order
+
+
+def parse_date(date_str) -> datetime:
+    """Parse date from various formats."""
+    if not date_str or (isinstance(date_str, float) and str(date_str) == 'nan'):
+        return datetime.now()
+    
+    if isinstance(date_str, datetime):
+        return date_str
+    
+    date_str = str(date_str).strip()
+    
+    # Try common formats
+    formats = [
+        '%m/%d/%Y',      # 12/15/2025
+        '%Y-%m-%d',      # 2025-12-15
+        '%d/%m/%Y',      # 15/12/2025
+        '%Y/%m/%d',      # 2025/12/15
+        '%d-%m-%Y',      # 15-12-2025
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    
+    return datetime.now()
+
+
+def safe_float(value, default=0.0) -> float:
+    """Safely convert value to float, handling NaN and None."""
+    if value is None:
+        return default
+    if isinstance(value, float) and str(value) == 'nan':
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_int(value, default=1) -> int:
+    """Safely convert value to int, handling NaN and None."""
+    if value is None:
+        return default
+    if isinstance(value, float) and str(value) == 'nan':
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_str(value, default='') -> str:
+    """Safely convert value to string, handling NaN and None."""
+    if value is None:
+        return default
+    if isinstance(value, float) and str(value) == 'nan':
+        return default
+    return str(value).strip()
 
 
 def import_orders_to_sage(orders: list[Order], dry_run: bool = False) -> dict:

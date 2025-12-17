@@ -236,6 +236,7 @@ class OrderLine(BaseModel):
     description: str
     quantity: int
     unit_price: float
+    unit_of_measure: str = "each"  # each, box, pack, etc.
     discount_percent: float = 0.0
     tax_amount: float = 0.0
     
@@ -274,6 +275,7 @@ class Order(BaseModel):
     ship_state: Optional[str] = None
     ship_postcode: Optional[str] = None
     ship_country: str = "GB"
+    ship_method: Optional[str] = None  # FedEx, UPS, Royal Mail, etc.
     
     # Line items
     lines: list[OrderLine] = Field(default_factory=list)

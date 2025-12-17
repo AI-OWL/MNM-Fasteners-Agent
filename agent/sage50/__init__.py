@@ -1,4 +1,4 @@
-"""
+r"""
 Sage 50 Quantum (UK) integration module.
 Provides interface to Sage 50 Accounts via ODBC, SDK (COM), or file-based.
 
