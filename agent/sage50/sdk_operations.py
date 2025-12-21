@@ -732,10 +732,8 @@ class SageSDK:
             # Ensure customer exists (auto-create if needed)
             customer_id = self._ensure_customer_exists(customer_id, order)
             
-            # Ensure all items exist (auto-create if needed)
-            for line in order.lines:
-                if line.sku:
-                    self._ensure_item_exists(line.sku, line.description)
+            # Note: Skipping item creation - using direct GL posting instead of inventory items
+            # This avoids item lookup issues and works for non-inventory sales
             
             # Create XML file for import
             xml_path = self._create_invoice_xml(order, customer_id, invoice_number)
@@ -1070,19 +1068,19 @@ class SageSDK:
         # Sales Lines
         sales_lines = ET.SubElement(invoice, "SalesLines")
         
+        # GL Account for sales - configurable, default 4100
+        sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
+        
         for line in order.lines:
             sales_line = ET.SubElement(sales_lines, "SalesLine")
             
             ET.SubElement(sales_line, "Quantity").text = str(line.quantity)
             
-            item_id = ET.SubElement(sales_line, "Item_ID")
-            item_id.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-            item_id.text = (line.sku or "ITEM")[:20]
+            # Use description that includes SKU for reference (skip Item_ID to avoid lookup issues)
+            desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
+            ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
             
-            ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
-            
-            # GL Account for sales - configurable, default 4100
-            sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
+            # GL Account for sales
             gl_acct = ET.SubElement(sales_line, "GL_Account")
             gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
             gl_acct.text = sales_account_id
@@ -1092,9 +1090,6 @@ class SageSDK:
             
             # Tax Type: 1 = Non-taxable (per spec)
             ET.SubElement(sales_line, "Tax_Type").text = "1"
-            
-            # Sales Tax ID: exempt (per spec)
-            ET.SubElement(sales_line, "Sales_Tax_ID").text = "exempt"
             
             # Amount (NEGATIVE for sales)
             line_amount = line.quantity * line.unit_price
@@ -1735,15 +1730,26 @@ class SageSDK:
                     unit_price = 0.0
             
             item_id = ""
-            if item_col and pd.notna(row.get(item_col)):
-                item_id = str(row[item_col]).strip()[:20]
-                # Clean up float-like IDs
-                if item_id.endswith('.0'):
-                    item_id = item_id[:-2]
+            if item_col:
+                try:
+                    val = row[item_col]
+                    logger.debug(f"    Raw Item ID value: '{val}' (type: {type(val).__name__})")
+                    if pd.notna(val):
+                        item_id = str(val).strip()[:20]
+                        # Clean up float-like IDs
+                        if item_id.endswith('.0'):
+                            item_id = item_id[:-2]
+                except Exception as e:
+                    logger.debug(f"    Item ID read error: {e}")
             
             description = ""
-            if desc_col and pd.notna(row.get(desc_col)):
-                description = str(row[desc_col]).strip()[:160]
+            if desc_col:
+                try:
+                    val = row[desc_col]
+                    if pd.notna(val):
+                        description = str(val).strip()[:160]
+                except:
+                    pass
             
             logger.debug(f"  Line: item={item_id}, qty={qty}, price={unit_price}")
             
