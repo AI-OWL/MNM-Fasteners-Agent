@@ -303,10 +303,17 @@ class Sage50Connector:
         
         # Try 0: Attach to ALREADY RUNNING Sage 50 (skip login entirely!)
         running_prog_ids = [
+            # Sage 50 names (current branding)
+            "Sage.Application",
+            "Sage50.Application",
+            "Sage50Accounting.Application",
+            "Sage 50.Application",
+            "Sage.50.Application",
+            # Peachtree names (legacy, but still used internally)
             "Peachtree.Application",
             "PeachtreeAccounting.Application", 
             "PeachtreeAccounting.Application.31",
-            "Sage50.Application",
+            "PeachtreeAccounting.Application.30",
         ]
         
         for prog_id in running_prog_ids:

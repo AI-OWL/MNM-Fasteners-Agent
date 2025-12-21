@@ -4,10 +4,11 @@ websockets==12.0
 aiohttp==3.9.1
 asyncio-mqtt==0.16.2
 
-# Windows Service & Sage SDK (COM)
+# Windows Service & Sage SDK (COM/.NET)
 pywin32==306
 pywin32-ctypes==0.2.2
 comtypes==1.2.0
+pythonnet==3.0.3
 
 # Excel/CSV Processing
 pandas==2.1.4

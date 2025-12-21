@@ -6,7 +6,8 @@ This allows FULLY AUTOMATIC operations - no manual CSV import needed!
 
 Requirements:
 - Sage 50 Accounting installed on the machine (US version)
-- pywin32 installed (pip install pywin32)
+- pythonnet installed (pip install pythonnet) - preferred
+- OR pywin32 installed (pip install pywin32) - fallback
 - Sage 50 NOT running (or run as same user)
 
 What the SDK Can Do:
@@ -20,12 +21,24 @@ from typing import Optional, Any
 from datetime import datetime
 from loguru import logger
 
+# Try pythonnet first (works better with .NET Interop assemblies)
+HAS_PYTHONNET = False
+HAS_COM = False
+
+try:
+    import clr
+    HAS_PYTHONNET = True
+    logger.debug("pythonnet available")
+except ImportError:
+    pass
+
 try:
     import win32com.client
     import pythoncom
     HAS_COM = True
+    logger.debug("win32com available")
 except ImportError:
-    HAS_COM = False
+    pass
 
 from agent.config import AgentConfig
 from agent.models import Order, OrderLine, Customer, Product, Platform
@@ -85,7 +98,7 @@ class SageSDK:
     
     def _init_com(self):
         """Initialize COM threading."""
-        if not self._com_initialized:
+        if HAS_COM and not self._com_initialized:
             pythoncom.CoInitialize()
             self._com_initialized = True
     
@@ -98,15 +111,77 @@ class SageSDK:
                 pass
             self._com_initialized = False
     
+    def _connect_pythonnet(self) -> bool:
+        """Connect using pythonnet (.NET Interop) - preferred method."""
+        import clr
+        
+        # Add reference to Sage Interop DLL
+        dll_paths = [
+            r"C:\Program Files (x86)\Sage\Peachtree\Interop.PeachwServer.dll",
+            r"C:\Program Files\Sage\Peachtree\Interop.PeachwServer.dll",
+        ]
+        
+        dll_loaded = False
+        for dll_path in dll_paths:
+            try:
+                clr.AddReference(dll_path)
+                dll_loaded = True
+                logger.info(f"Loaded Sage DLL: {dll_path}")
+                break
+            except Exception as e:
+                logger.debug(f"Could not load {dll_path}: {e}")
+                continue
+        
+        if not dll_loaded:
+            raise SageSDKError("Could not find Interop.PeachwServer.dll")
+        
+        # Import and create Login object
+        from Interop.PeachwServer import Login
+        self._login = Login()
+        self._api_type = "peachtree"
+        
+        # Get credentials
+        username = self.config.sage50_username or "Peachtree Software"
+        password = self.config.sage50_password or ""
+        
+        logger.info(f"Connecting with pythonnet (user={username})...")
+        
+        # Get Application
+        app = self._login.GetApplication(username, password)
+        
+        if app is None:
+            raise SageSDKError("GetApplication returned None")
+        
+        logger.info(f"Got Application object: {type(app)}")
+        
+        # Open company if path provided
+        data_path = self.config.sage50_company_path
+        if data_path and hasattr(app, 'OpenCompany'):
+            logger.info(f"Opening company: {data_path}")
+            app.OpenCompany(data_path)
+        
+        self._company = app
+        self._connected = True
+        logger.info("Connected to Sage 50 via pythonnet!")
+        return True
+    
     def connect(self) -> bool:
         """
         Connect to Sage 50 via SDK.
         
-        Tries Peachtree (US) first, then SDO (UK) if that fails.
+        Tries pythonnet first (better for .NET Interop), then win32com fallback.
         Note: Sage 50 should NOT be running, or must be run as same user.
         """
+        # Try pythonnet first (works better with .NET Interop assemblies)
+        if HAS_PYTHONNET:
+            try:
+                return self._connect_pythonnet()
+            except Exception as e:
+                logger.warning(f"pythonnet connection failed: {e}, trying win32com...")
+        
+        # Fall back to win32com
         if not HAS_COM:
-            raise SageSDKError("pywin32 not installed. Run: pip install pywin32")
+            raise SageSDKError("Neither pythonnet nor pywin32 installed. Run: pip install pythonnet")
         
         self._init_com()
         
@@ -169,10 +244,17 @@ class SageSDK:
             
             # Try 0: Connect to ALREADY RUNNING Sage 50 instance (skip auth if user is logged in)
             running_prog_ids = [
+                # Sage 50 names (current branding)
+                "Sage.Application",
+                "Sage50.Application",
+                "Sage50Accounting.Application",
+                "Sage 50.Application",
+                "Sage.50.Application",
+                # Peachtree names (legacy, but still used internally)
                 "Peachtree.Application",
                 "PeachtreeAccounting.Application",
                 "PeachtreeAccounting.Application.31",
-                "Sage50.Application",
+                "PeachtreeAccounting.Application.30",
             ]
             
             for prog_id in running_prog_ids:
