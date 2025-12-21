@@ -941,36 +941,10 @@ class SageSDK:
         return item_id
     
     def _item_exists(self, item_id: str) -> bool:
-        """Check if an item exists in Sage."""
-        if not HAS_PYTHONNET or not self._company:
-            return False
-        
-        try:
-            # Try to export item list filtered to this ID
-            from Interop.PeachwServer import PeachwIEObj, PeachwIEFileType
-            
-            exporter = self._company.CreateExporter(PeachwIEObj.peachwIEObjInventoryItemsList)
-            
-            # Set filter for item ID
-            exporter.SetSelectField("ItemID", item_id, item_id)
-            
-            # Export to temp file
-            temp_path = Path(tempfile.gettempdir()) / f"item_check_{item_id}.xml"
-            exporter.SetFilename(str(temp_path))
-            exporter.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
-            exporter.Export()
-            
-            # Check if any results
-            if temp_path.exists():
-                content = temp_path.read_text()
-                temp_path.unlink()
-                return item_id in content
-            
-            return False
-            
-        except Exception as e:
-            logger.debug(f"Item check failed: {e}")
-            return False
+        """Check if an item exists in Sage. Returns False to always try creation."""
+        # Skip check - just try to create. If item exists, import will handle it.
+        # This avoids complex exporter setup issues.
+        return False
     
     def _create_item(self, item_id: str, description: str = ""):
         """Create a new item in Sage via XML import."""
@@ -1014,8 +988,9 @@ class SageSDK:
         tree.write(str(temp_path), encoding="utf-8", xml_declaration=True)
         
         try:
-            # Import item using correct enum
-            importer = self._company.CreateImporter(PeachwIEObj.peachwIEObjInventoryItemsList)
+            # Import item using correct enum - wrap with Import class like customer import
+            from Interop.PeachwServer import Import
+            importer = Import(self._company.CreateImporter(PeachwIEObj.peachwIEObjInventoryItemsList))
             importer.SetFilename(str(temp_path))
             importer.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
             importer.Import()
