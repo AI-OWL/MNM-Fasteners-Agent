@@ -301,6 +301,37 @@ class Sage50Connector:
         username = self.config.sage50_username or "Peachtree"
         password = self.config.sage50_password or ""
         
+        # Try 0: Attach to ALREADY RUNNING Sage 50 (skip login entirely!)
+        running_prog_ids = [
+            "Peachtree.Application",
+            "PeachtreeAccounting.Application", 
+            "PeachtreeAccounting.Application.31",
+            "Sage50.Application",
+        ]
+        
+        for prog_id in running_prog_ids:
+            try:
+                logger.debug(f"Checking for running instance: {prog_id}")
+                app = win32com.client.GetActiveObject(prog_id)
+                
+                if app:
+                    # Verify it has the methods we need
+                    if hasattr(app, 'Customers') or hasattr(app, 'SalesOrders'):
+                        self._connection = app
+                        self._connection_type = "com"
+                        self._connected = True
+                        self._sage_version = f"Sage 50 (Running - {prog_id})"
+                        self._company_name = "Sage 50 (Attached to running instance)"
+                        
+                        logger.info(f"✅ Attached to running Sage 50 instance via {prog_id}!")
+                        return True
+                        
+            except Exception as e:
+                logger.debug(f"No running instance for {prog_id}: {e}")
+                continue
+        
+        logger.info("No running Sage instance found, trying login...")
+        
         # Try 1: Peachtree/US version (Sage 50 Accounting)
         for prog_id in self.PEACHTREE_PROGIDS:
             try:
