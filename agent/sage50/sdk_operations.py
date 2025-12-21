@@ -19,6 +19,9 @@ What the SDK Can Do:
 
 from typing import Optional, Any
 from datetime import datetime
+from pathlib import Path
+import tempfile
+import xml.etree.ElementTree as ET
 from loguru import logger
 
 # Try pythonnet first (works better with .NET Interop assemblies)
@@ -158,12 +161,16 @@ class SageSDK:
         app = Application(obj)
         logger.info(f"Got Application object: {type(app)}")
         
-        # Open company if path provided
-        data_path = self.config.sage50_company_path
-        if data_path:
-            logger.info(f"Opening company: {data_path}")
-            app.OpenCompany(data_path)
-            logger.info(f"Company opened: {app.get_CurrentCompanyName()}")
+        # Check if company is already open (user has Sage running)
+        if app.get_CompanyIsOpen():
+            logger.info(f"Company already open: {app.get_CurrentCompanyName()}")
+        else:
+            # Open company if path provided
+            data_path = self.config.sage50_company_path
+            if data_path:
+                logger.info(f"Opening company: {data_path}")
+                app.OpenCompany(data_path)
+                logger.info(f"Company opened: {app.get_CurrentCompanyName()}")
         
         self._company = app
         self._connected = True
@@ -684,70 +691,293 @@ class SageSDK:
             return self._create_sales_order_sdo(order)
     
     def _create_sales_order_peachtree(self, order: Order) -> dict:
-        """Create sales order using Peachtree API (US)."""
+        """
+        Create sales order using Peachtree API (US) via XML Import.
+        
+        Based on the Sage 50 SDK sample code (frmNewCustInvoices.cs):
+        1. Create XML file with invoice data
+        2. Use CreateImporter() to import
+        3. SDK validates and creates the invoice
+        """
         try:
             platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
             platform = str(order.source_platform).replace("Platform.", "")
             
-            # Get or create customer
-            customer_id = self._get_or_create_customer_peachtree(order)
+            # Generate customer ID
+            name = order.customer_name or "CUSTOMER"
+            customer_id = name[:14].upper().replace(" ", "")
+            if order.amazon_order_id:
+                customer_id = "AMZ-" + customer_id[:10]
+            elif order.ebay_order_id:
+                customer_id = "EBY-" + customer_id[:10]
+            elif order.shopify_order_id:
+                customer_id = "SHP-" + customer_id[:10]
             
-            # Create sales order
-            sales_orders = self._company.SalesOrders
-            new_order = sales_orders.Add()
+            # Generate invoice number from platform order ID
+            invoice_number = platform_id[:20] if platform_id else f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S')}"
             
-            # Set customer
-            new_order.CustomerID = customer_id
+            # Create XML file for import
+            xml_path = self._create_invoice_xml(order, customer_id, invoice_number)
             
-            # Set addresses
-            new_order.ShipToName = order.customer_name[:40] if order.customer_name else ""
-            new_order.ShipToAddress1 = (order.ship_address_1 or "")[:40]
-            new_order.ShipToAddress2 = (order.ship_address_2 or "")[:40]
-            new_order.ShipToCity = (order.ship_city or "")[:25]
-            new_order.ShipToState = (order.ship_state or "")[:2]
-            new_order.ShipToZip = (order.ship_postcode or "")[:12]
+            # Import using SDK
+            result = self._import_sales_journal(xml_path)
             
-            # Set date
-            new_order.Date = order.order_date
+            # Clean up temp file
+            try:
+                Path(xml_path).unlink()
+            except Exception:
+                pass
             
-            # Set reference (platform order ID)
-            if platform_id:
-                new_order.CustomerPurchaseOrder = f"{platform}:{platform_id}"[:20]
-            
-            # Add line items
-            for line in order.lines:
-                order_line = new_order.Lines.Add()
-                order_line.ItemID = line.sku[:20] if line.sku else ""
-                order_line.Description = line.description[:160] if line.description else ""
-                order_line.Quantity = line.quantity
-                order_line.UnitPrice = line.unit_price
-            
-            # Add shipping as line item if present
-            if order.shipping_cost > 0:
-                ship_line = new_order.Lines.Add()
-                ship_line.ItemID = "SHIPPING"
-                ship_line.Description = "Shipping & Handling"
-                ship_line.Quantity = 1
-                ship_line.UnitPrice = order.shipping_cost
-            
-            # Save
-            new_order.Save()
-            
-            # Get order number
-            sage_order_ref = str(new_order.ReferenceNumber) if hasattr(new_order, 'ReferenceNumber') else "NEW"
-            
-            logger.info(f"Created Sage order {sage_order_ref} for {platform_id}")
-            
-            return {
-                "success": True,
-                "sage_order_ref": sage_order_ref,
-                "platform_order_id": platform_id,
-                "message": "Order created automatically in Sage (Peachtree)",
-            }
+            if result["success"]:
+                logger.info(f"Created Sage invoice {invoice_number} for {platform_id}")
+                return {
+                    "success": True,
+                    "sage_order_ref": invoice_number,
+                    "platform_order_id": platform_id,
+                    "message": "Order imported to Sage via SDK",
+                }
+            else:
+                raise SageSDKError(result.get("error", "Import failed"))
             
         except Exception as e:
             logger.error(f"Failed to create order (Peachtree): {e}")
             raise SageSDKError(f"Failed to create order: {e}")
+    
+    def _create_invoice_xml(self, order: Order, customer_id: str, invoice_number: str) -> str:
+        """
+        Create XML file in Peachtree format for import.
+        
+        Format based on Sage SDK sample code.
+        Note: Amounts are NEGATIVE for sales (credits to income accounts).
+        """
+        # Calculate totals
+        subtotal = sum(line.quantity * line.unit_price for line in order.lines)
+        if order.shipping_cost > 0:
+            subtotal += order.shipping_cost
+        total = subtotal  # Add tax if needed
+        
+        # Create XML structure
+        root = ET.Element("PAW_Invoices")
+        root.set("xmlns:paw", "urn:schemas-peachtree-com/paw8.02-datatypes")
+        root.set("xmlns:xsi", "http://www.w3.org/2000/10/XMLSchema-instance")
+        root.set("xmlns:xsd", "http://www.w3.org/2000/10/XMLSchema-datatypes")
+        
+        # Create invoice element
+        invoice = ET.SubElement(root, "PAW_Invoice")
+        invoice.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:receipt")
+        
+        # Customer ID
+        cust_id_elem = ET.SubElement(invoice, "Customer_ID")
+        cust_id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        cust_id_elem.text = customer_id
+        
+        # Customer Name
+        ET.SubElement(invoice, "Customer_Name").text = (order.customer_name or "")[:40]
+        
+        # Date
+        date_elem = ET.SubElement(invoice, "Date")
+        date_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:date")
+        date_elem.text = order.order_date.strftime("%m/%d/%Y") if order.order_date else datetime.now().strftime("%m/%d/%Y")
+        
+        # Invoice Number
+        ET.SubElement(invoice, "Invoice_Number").text = invoice_number
+        
+        # Ship To Address
+        ET.SubElement(invoice, "Line1").text = (order.ship_address_1 or "")[:40]
+        ET.SubElement(invoice, "Line2").text = (order.ship_address_2 or "")[:40]
+        ET.SubElement(invoice, "City").text = (order.ship_city or "")[:25]
+        ET.SubElement(invoice, "State").text = (order.ship_state or "")[:2]
+        ET.SubElement(invoice, "Zip").text = (order.ship_postcode or "")[:12]
+        
+        # AR Account - use default if not specified
+        ar_acct = ET.SubElement(invoice, "Accounts_Receivable_Account")
+        ar_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        ar_acct.text = "11000"  # Standard AR account - may need config
+        
+        # AR Amount (total)
+        ET.SubElement(invoice, "Accounts_Receivable_Amount").text = f"{total:.2f}"
+        
+        # Credit Memo Type
+        ET.SubElement(invoice, "CreditMemoType").text = "FALSE"
+        
+        # Number of distributions (line items)
+        num_distributions = len(order.lines)
+        if order.shipping_cost > 0:
+            num_distributions += 1
+        ET.SubElement(invoice, "Number_of_Distributions").text = str(num_distributions)
+        
+        # Sales Lines
+        sales_lines = ET.SubElement(invoice, "SalesLines")
+        
+        for line in order.lines:
+            sales_line = ET.SubElement(sales_lines, "SalesLine")
+            
+            ET.SubElement(sales_line, "Quantity").text = str(line.quantity)
+            
+            item_id = ET.SubElement(sales_line, "Item_ID")
+            item_id.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+            item_id.text = (line.sku or "ITEM")[:20]
+            
+            ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
+            
+            # GL Account for sales - may need config
+            gl_acct = ET.SubElement(sales_line, "GL_Account")
+            gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+            gl_acct.text = "40000"  # Standard Sales account
+            
+            # Unit Price (NEGATIVE for sales)
+            ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
+            
+            # Tax Type (2 = Taxable, 1 = Non-taxable)
+            ET.SubElement(sales_line, "Tax_Type").text = "2"
+            
+            # Amount (NEGATIVE for sales)
+            line_amount = line.quantity * line.unit_price
+            ET.SubElement(sales_line, "Amount").text = f"{-line_amount:.2f}"
+        
+        # Add shipping line if present
+        if order.shipping_cost > 0:
+            ship_line = ET.SubElement(sales_lines, "SalesLine")
+            
+            ET.SubElement(ship_line, "Quantity").text = "1"
+            
+            ship_item = ET.SubElement(ship_line, "Item_ID")
+            ship_item.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+            ship_item.text = "SHIPPING"
+            
+            ET.SubElement(ship_line, "Description").text = "Shipping & Handling"
+            
+            ship_gl = ET.SubElement(ship_line, "GL_Account")
+            ship_gl.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+            ship_gl.text = "40000"
+            
+            ET.SubElement(ship_line, "Unit_Price").text = f"{-order.shipping_cost:.2f}"
+            ET.SubElement(ship_line, "Tax_Type").text = "1"  # Shipping usually non-taxable
+            ET.SubElement(ship_line, "Amount").text = f"{-order.shipping_cost:.2f}"
+        
+        # Write to temp file
+        temp_dir = tempfile.gettempdir()
+        xml_path = Path(temp_dir) / f"sage_import_{datetime.now().strftime('%Y%m%d%H%M%S')}.xml"
+        
+        tree = ET.ElementTree(root)
+        tree.write(str(xml_path), encoding="utf-8", xml_declaration=True)
+        
+        logger.debug(f"Created import XML: {xml_path}")
+        return str(xml_path)
+    
+    def _import_sales_journal(self, xml_path: str) -> dict:
+        """
+        Import sales journal entries from XML file using SDK.
+        
+        Uses CreateImporter() with PeachwIEObj.peachwIEObjSalesJournal.
+        """
+        if not self._connected or not self._company:
+            return {"success": False, "error": "Not connected to Sage"}
+        
+        try:
+            # Import the enums from PeachwServer
+            if HAS_PYTHONNET:
+                import clr
+                from Interop.PeachwServer import (
+                    PeachwIEObj, 
+                    PeachwIEObjSalesJournalField,
+                    PeachwIEFileType,
+                    Import
+                )
+                
+                # Create importer for Sales Journal
+                importer_obj = self._company.CreateImporter(PeachwIEObj.peachwIEObjSalesJournal)
+                importer = Import(importer_obj) if importer_obj else None
+                
+                if not importer:
+                    return {"success": False, "error": "Failed to create importer"}
+                
+                # Clear and set up field list
+                importer.ClearImportFieldList()
+                
+                # Add fields to import (from C# sample)
+                fields = [
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerId,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerName,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Date,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_InvoiceNumber,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToAddressLine1,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToAddressLine2,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToCity,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToState,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToZip,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ARAccountId,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ARAmount,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_IsCreditMemo,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_NumberOfDistributions,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Quantity,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ItemId,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Description,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_GLAccountId,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_UnitPrice,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_TaxType,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Amount,
+                ]
+                
+                for field in fields:
+                    importer.AddToImportFieldList(int(field))
+                
+                # Set file info
+                importer.SetFilename(xml_path)
+                importer.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
+                
+                # Perform import
+                importer.Import()
+                
+                logger.info(f"Successfully imported from {xml_path}")
+                return {"success": True}
+                
+            else:
+                # Fallback using win32com
+                # Create importer - PeachwIEObj.peachwIEObjSalesJournal = 0
+                importer = self._company.CreateImporter(0)  # 0 = SalesJournal
+                
+                importer.ClearImportFieldList()
+                
+                # Field IDs from Sage SDK documentation
+                sales_journal_fields = [
+                    0,   # CustomerId
+                    1,   # CustomerName
+                    2,   # Date
+                    3,   # InvoiceNumber
+                    4,   # ShipToAddressLine1
+                    5,   # ShipToAddressLine2
+                    6,   # ShipToCity
+                    7,   # ShipToState
+                    8,   # ShipToZip
+                    9,   # ARAccountId
+                    10,  # ARAmount
+                    11,  # IsCreditMemo
+                    12,  # NumberOfDistributions
+                    13,  # Quantity
+                    14,  # ItemId
+                    15,  # Description
+                    16,  # GLAccountId
+                    17,  # UnitPrice
+                    18,  # TaxType
+                    19,  # Amount
+                ]
+                
+                for field_id in sales_journal_fields:
+                    importer.AddToImportFieldList(field_id)
+                
+                # Set file info - peachwIEFileTypeXML = 1
+                importer.SetFilename(xml_path)
+                importer.SetFileType(1)
+                
+                # Import
+                importer.Import()
+                
+                return {"success": True}
+                
+        except Exception as e:
+            logger.error(f"Import failed: {e}")
+            return {"success": False, "error": str(e)}
     
     def _create_sales_order_sdo(self, order: Order) -> dict:
         """Create sales order using SDO API (UK)."""
@@ -992,11 +1222,11 @@ class SageSDK:
         result = {
             "success": False,
             "message": "",
-            "sdk_available": HAS_COM,
+            "sdk_available": HAS_COM or HAS_PYTHONNET,
         }
         
-        if not HAS_COM:
-            result["message"] = "pywin32 not installed"
+        if not HAS_COM and not HAS_PYTHONNET:
+            result["message"] = "Neither pythonnet nor pywin32 installed"
             return result
         
         try:
@@ -1019,4 +1249,46 @@ class SageSDK:
             result["message"] = f"Error: {e}"
         
         return result
+    
+    def test_import(self) -> dict:
+        """
+        Test the import functionality by creating a sample invoice.
+        
+        This creates a test invoice with one line item to verify
+        the SDK import is working correctly.
+        """
+        if not self._connected:
+            return {"success": False, "error": "Not connected to Sage"}
+        
+        try:
+            # Create a simple test order
+            from agent.models import Order, OrderLine, Platform
+            
+            test_order = Order(
+                order_date=datetime.now(),
+                customer_name="SDK Test Customer",
+                ship_name="SDK Test Customer",
+                ship_address_1="123 Test Street",
+                ship_city="Test City",
+                ship_state="TX",
+                ship_postcode="12345",
+                source_platform=Platform.SAGE_QUANTUM,
+                amazon_order_id=f"TEST-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            )
+            
+            # Add test line item
+            test_order.lines.append(OrderLine(
+                sku="TEST-ITEM",
+                description="SDK Import Test Item",
+                quantity=1,
+                unit_price=10.00,
+            ))
+            
+            # Try to import
+            result = self._create_sales_order_peachtree(test_order)
+            
+            return result
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
