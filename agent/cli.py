@@ -243,7 +243,7 @@ HEARTBEAT_INTERVAL=60
 TASK_TIMEOUT=300
 '''
     
-    config_path.write_text(template)
+    config_path.write_text(template, encoding='utf-8')
     console.print(f"[green]✓ Configuration file created: {config_path}[/green]")
     console.print("\nEdit this file with your settings, then run:")
     console.print(f"  mnm-agent --config {config_path} run")

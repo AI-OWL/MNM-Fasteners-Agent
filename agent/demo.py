@@ -295,7 +295,7 @@ def demo_report_generation():
     # Generate HTML version
     html = generator.generate_html_report(report)
     html_path = Path("demo_reports") / f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-    html_path.write_text(html)
+    html_path.write_text(html, encoding='utf-8')
     console.print(f"[green]HTML report saved to: {html_path}[/green]")
     
     return report
