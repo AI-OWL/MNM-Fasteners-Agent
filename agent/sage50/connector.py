@@ -20,7 +20,15 @@ from datetime import datetime
 from pathlib import Path
 from loguru import logger
 
-# Windows COM imports
+# pythonnet (preferred for Sage 50 US - doesn't kick out user)
+try:
+    import clr
+    HAS_PYTHONNET = True
+except ImportError:
+    HAS_PYTHONNET = False
+    logger.debug("pythonnet not available")
+
+# Windows COM imports (fallback)
 try:
     import win32com.client
     import pythoncom
@@ -292,54 +300,104 @@ class Sage50Connector:
             raise Sage50ConnectionError(f"ODBC error: {e}")
     
     def _connect_com(self) -> bool:
-        """Connect via COM/SDO."""
-        self._init_com()
+        """
+        Connect via COM/SDK.
         
-        logger.info("Connecting to Sage 50 via COM/SDO...")
-        
+        IMPORTANT: Uses pythonnet first (doesn't kick out user), 
+        then falls back to win32com if needed.
+        """
         data_path = self.config.sage50_company_path or self.find_sage_data_path()
-        username = self.config.sage50_username or "Peachtree"
+        username = self.config.sage50_username or "Peachtree Software"
         password = self.config.sage50_password or ""
         
-        # Try 0: Attach to ALREADY RUNNING Sage 50 (skip login entirely!)
-        running_prog_ids = [
-            # Sage 50 names (current branding)
-            "Sage.Application",
-            "Sage50.Application",
-            "Sage50Accounting.Application",
-            "Sage 50.Application",
-            "Sage.50.Application",
-            # Peachtree names (legacy, but still used internally)
-            "Peachtree.Application",
-            "PeachtreeAccounting.Application", 
-            "PeachtreeAccounting.Application.31",
-            "PeachtreeAccounting.Application.30",
+        # Try 1: PYTHONNET (preferred - doesn't kick out user!)
+        if HAS_PYTHONNET:
+            try:
+                logger.info("Connecting via pythonnet (preferred - won't kick out user)...")
+                return self._connect_pythonnet(data_path, username, password)
+            except Exception as e:
+                logger.warning(f"pythonnet connection failed: {e}")
+        
+        # Try 2: win32com (may kick out user - not recommended)
+        if HAS_COM:
+            logger.warning("Falling back to win32com (may kick out user)...")
+            self._init_com()
+            return self._connect_win32com(data_path, username, password)
+        
+        raise Sage50ConnectionError("Neither pythonnet nor pywin32 available")
+    
+    def _connect_pythonnet(self, data_path: str, username: str, password: str) -> bool:
+        """
+        Connect using pythonnet (.NET Interop) - PREFERRED METHOD.
+        
+        This method attaches to the running Sage instance without kicking out the user.
+        """
+        import clr
+        
+        # Add reference to Sage Interop DLL
+        dll_paths = [
+            r"C:\Program Files (x86)\Sage\Peachtree\Interop.PeachwServer.dll",
+            r"C:\Program Files\Sage\Peachtree\Interop.PeachwServer.dll",
         ]
         
-        for prog_id in running_prog_ids:
+        dll_loaded = False
+        for dll_path in dll_paths:
             try:
-                logger.debug(f"Checking for running instance: {prog_id}")
-                app = win32com.client.GetActiveObject(prog_id)
-                
-                if app:
-                    # Verify it has the methods we need
-                    if hasattr(app, 'Customers') or hasattr(app, 'SalesOrders'):
-                        self._connection = app
-                        self._connection_type = "com"
-                        self._connected = True
-                        self._sage_version = f"Sage 50 (Running - {prog_id})"
-                        self._company_name = "Sage 50 (Attached to running instance)"
-                        
-                        logger.info(f"✅ Attached to running Sage 50 instance via {prog_id}!")
-                        return True
-                        
+                clr.AddReference(dll_path)
+                dll_loaded = True
+                logger.debug(f"Loaded Sage DLL: {dll_path}")
+                break
             except Exception as e:
-                logger.debug(f"No running instance for {prog_id}: {e}")
+                logger.debug(f"Could not load {dll_path}: {e}")
                 continue
         
-        logger.info("No running Sage instance found, trying login...")
+        if not dll_loaded:
+            raise Sage50ConnectionError("Could not find Interop.PeachwServer.dll")
         
-        # Try 1: Peachtree/US version (Sage 50 Accounting)
+        # Import and create Login object
+        from Interop.PeachwServer import Login, Application
+        
+        login = Login()
+        logger.info(f"Calling GetApplication('{username}', '***')...")
+        
+        # Get Application object and cast to proper type
+        obj = login.GetApplication(username, password)
+        
+        if obj is None:
+            raise Sage50ConnectionError("GetApplication returned None")
+        
+        # Cast to Application to expose all methods
+        app = Application(obj)
+        
+        # Check if company is already open (user has Sage running)
+        if app.get_CompanyIsOpen():
+            self._company_name = app.get_CurrentCompanyName()
+            logger.info(f"✅ Attached to running Sage: {self._company_name} (won't log out user)")
+        else:
+            # Open company if path provided
+            if data_path:
+                logger.info(f"Opening company: {data_path}")
+                app.OpenCompany(data_path)
+                self._company_name = app.get_CurrentCompanyName()
+            else:
+                self._company_name = "Sage 50"
+        
+        self._connection = app
+        self._connection_type = "com"
+        self._connected = True
+        self._sage_version = "Sage 50 Accounting (pythonnet)"
+        self._data_path = data_path
+        
+        logger.info(f"Connected to Sage 50 via pythonnet: {self._company_name}")
+        return True
+    
+    def _connect_win32com(self, data_path: str, username: str, password: str) -> bool:
+        """
+        Connect using win32com - FALLBACK METHOD.
+        
+        WARNING: This may kick out the user from Sage!
+        """
+        # Try Peachtree/US version (Sage 50 Accounting)
         for prog_id in self.PEACHTREE_PROGIDS:
             try:
                 logger.debug(f"Trying Peachtree: {prog_id}")
@@ -367,7 +425,7 @@ class Sage50Connector:
                 logger.debug(f"Peachtree {prog_id} failed: {e}")
                 continue
         
-        # Try 2: UK SDO version
+        # Try UK SDO version
         sdo_engine = None
         for prog_id in self.SDO_PROGIDS:
             try:
