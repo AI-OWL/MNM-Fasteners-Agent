@@ -70,11 +70,20 @@ class Sage50Connector:
     """
     
     # SDO ProgIDs for different Sage 50 versions
+    # UK Sage 50 ProgIDs
     SDO_PROGIDS = [
         "SageDataObject50.SDOEngine",      # Standard
         "SageDataObject50v29.SDOEngine",   # Version 29 (2024)
         "SageDataObject50v28.SDOEngine",   # Version 28 (2023)
         "SageDataObject50v27.SDOEngine",   # Version 27 (2022)
+    ]
+    
+    # US Peachtree/Sage 50 Accounting ProgIDs
+    PEACHTREE_PROGIDS = [
+        "PeachtreeAccounting.Login.31",    # Sage 50 2024
+        "PeachtreeAccounting.Login.30",    # Sage 50 2023
+        "PeachtreeAccounting.Login",       # Generic
+        "PeachwServer.Login",              # Alternative
     ]
     
     # Common ODBC DSN names
@@ -288,9 +297,40 @@ class Sage50Connector:
         
         logger.info("Connecting to Sage 50 via COM/SDO...")
         
-        sdo_engine = None
+        data_path = self.config.sage50_company_path or self.find_sage_data_path()
+        username = self.config.sage50_username or "Peachtree"
+        password = self.config.sage50_password or ""
         
-        # Try different ProgIDs
+        # Try 1: Peachtree/US version (Sage 50 Accounting)
+        for prog_id in self.PEACHTREE_PROGIDS:
+            try:
+                logger.debug(f"Trying Peachtree: {prog_id}")
+                login = win32com.client.Dispatch(prog_id)
+                
+                # Get Application object
+                app = login.GetApplication(username, password)
+                
+                if app and 'ILogin' not in str(type(app)):
+                    # Open company if path provided
+                    if data_path and hasattr(app, 'OpenCompany'):
+                        app.OpenCompany(data_path)
+                    
+                    self._connection = app
+                    self._connection_type = "com"
+                    self._connected = True
+                    self._sage_version = f"Sage 50 Accounting ({prog_id})"
+                    self._data_path = data_path
+                    self._company_name = "Sage 50 Accounting"
+                    
+                    logger.info(f"Connected to Sage 50 Accounting via {prog_id}")
+                    return True
+                    
+            except Exception as e:
+                logger.debug(f"Peachtree {prog_id} failed: {e}")
+                continue
+        
+        # Try 2: UK SDO version
+        sdo_engine = None
         for prog_id in self.SDO_PROGIDS:
             try:
                 sdo_engine = win32com.client.Dispatch(prog_id)
@@ -303,16 +343,13 @@ class Sage50Connector:
             raise Sage50ConnectionError("Could not create Sage SDO object")
         
         try:
-            # Find data path
-            data_path = self.config.sage50_company_path or self.find_sage_data_path()
-            
             if data_path:
                 # Open company
                 ws = sdo_engine.Workspaces.Add("Main")
                 ws.Connect(
                     data_path,
-                    self.config.sage50_username or "",
-                    self.config.sage50_password or "",
+                    username,
+                    password,
                     "Main"
                 )
                 self._connection = ws
