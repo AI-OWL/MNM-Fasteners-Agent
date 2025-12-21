@@ -94,6 +94,7 @@ class SageSDK:
         self._connected = False
         self._com_initialized = False
         self._api_type = None  # "peachtree" or "sdo"
+        self._company_was_already_open = False  # Don't close if user had it open
     
     @property
     def is_connected(self) -> bool:
@@ -163,9 +164,11 @@ class SageSDK:
         
         # Check if company is already open (user has Sage running)
         if app.get_CompanyIsOpen():
-            logger.info(f"Company already open: {app.get_CurrentCompanyName()}")
+            self._company_was_already_open = True
+            logger.info(f"Company already open: {app.get_CurrentCompanyName()} (will NOT close on disconnect)")
         else:
             # Open company if path provided
+            self._company_was_already_open = False
             data_path = self.config.sage50_company_path
             if data_path:
                 logger.info(f"Opening company: {data_path}")
@@ -479,15 +482,19 @@ class SageSDK:
             raise SageSDKError(f"Failed to connect: {e}")
     
     def disconnect(self):
-        """Disconnect from Sage."""
+        """
+        Disconnect from Sage.
+        
+        IMPORTANT: We NEVER close the company - the automation is designed
+        to run while the user has Sage open. Closing would log them out.
+        We just release our reference to the objects.
+        """
         try:
             if self._api_type == "peachtree":
-                if self._company:
-                    try:
-                        self._company.Close()
-                    except:
-                        pass
-                    self._company = None
+                # NEVER call Close() - it logs out the user!
+                # Just release our reference
+                logger.info("Releasing Sage connection (leaving company open)")
+                self._company = None
             else:  # sdo
                 if self._company:
                     try:

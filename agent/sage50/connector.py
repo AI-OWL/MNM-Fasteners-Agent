@@ -430,15 +430,20 @@ class Sage50Connector:
         return True
     
     def disconnect(self):
-        """Disconnect from Sage 50."""
+        """
+        Disconnect from Sage 50.
+        
+        IMPORTANT: For COM/Peachtree connections, we NEVER call Disconnect()
+        or Close() because that would log out the user from Sage.
+        The automation is designed to run while Sage is open.
+        """
         try:
             if self._connection_type == "odbc" and self._connection:
                 self._connection.close()
             elif self._connection_type == "com" and self._connection:
-                try:
-                    self._connection.Disconnect()
-                except Exception:
-                    pass
+                # NEVER call Disconnect() - it logs out the user!
+                # Just release our reference
+                logger.info("Releasing Sage COM connection (leaving Sage open)")
             
             self._connection = None
             self._connected = False
