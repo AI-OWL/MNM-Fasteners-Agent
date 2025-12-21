@@ -159,92 +159,127 @@ class SageSDK:
         try:
             logger.info(f"Opening Peachtree company: {data_path}")
             
-            # Try 1: GetApplication() with credentials - THIS IS THE KEY!
-            username = self.config.sage50_username or ""
-            password = self.config.sage50_password or ""
+            # Per Sage 50 SDK docs, the flow is:
+            # 1. Login.GetApplication(COM_Username, COM_Password) - third-party access creds
+            # 2. App.OpenCompany(path) or App.OpenCompanySecure(path, user, pass)
+            
+            # COM/Third-party credentials (from "Access From Outside Sage 50" setting)
+            com_username = self.config.sage50_username or "Peachtree"
+            com_password = self.config.sage50_password or ""
+            
+            # Company credentials (regular Sage login - might be needed for OpenCompanySecure)
+            # For now we'll try OpenCompany first (no company-level auth)
             
             try:
-                logger.debug(f"Trying GetApplication with credentials (user={username})...")
+                logger.debug(f"Step 1: GetApplication with COM credentials (user={com_username})...")
+                app = self._login.GetApplication(com_username, com_password)
                 
-                # GetApplication might throw an exception but still work!
-                # We catch the exception and check if we're actually connected
-                app = None
-                try:
-                    app = self._login.GetApplication(username, password)
-                except Exception as e_get:
-                    logger.debug(f"GetApplication raised exception: {e_get}")
-                    # Check if we got a partial connection anyway
-                    # The login object might now have company access
+                # Verify we got an Application object, not None or Login
+                if app is None:
+                    raise Exception("GetApplication returned None")
+                
+                app_type = str(type(app))
+                logger.info(f"Got object of type: {app_type}")
+                
+                # Check if we actually got an Application (should have OpenCompany)
+                if 'ILogin' in app_type:
+                    logger.warning("GetApplication returned Login object instead of Application!")
+                    raise Exception("GetApplication returned Login instead of Application")
+                
+                methods = [m for m in dir(app) if not m.startswith('_')]
+                logger.debug(f"App methods: {methods[:20]}...")
+                
+                # Verify this is an Application by checking for expected methods
+                if not hasattr(app, 'OpenCompany') and not hasattr(app, 'Customers'):
+                    logger.warning(f"Object missing expected Application methods")
+                    raise Exception("Object doesn't appear to be an Application")
+                
+                # Step 2: Open the company
+                logger.debug(f"Step 2: Opening company at {data_path}...")
+                
+                # Check if company uses passwords
+                if hasattr(app, 'CheckCompanyUsesPasswords'):
                     try:
-                        # Try to use the login object directly
-                        app = self._login
-                        logger.debug("Using login object as app after exception")
-                    except:
-                        pass
+                        uses_passwords = app.CheckCompanyUsesPasswords(data_path)
+                        logger.debug(f"Company uses passwords: {uses_passwords}")
+                        
+                        if uses_passwords:
+                            # Need company-level credentials
+                            # Try with the same credentials or empty
+                            logger.debug("Trying OpenCompanySecure...")
+                            app.OpenCompanySecure(data_path, com_username, com_password)
+                        else:
+                            logger.debug("Trying OpenCompany (no auth needed)...")
+                            app.OpenCompany(data_path)
+                    except Exception as e_check:
+                        logger.debug(f"CheckCompanyUsesPasswords failed: {e_check}, trying OpenCompany...")
+                        app.OpenCompany(data_path)
+                elif hasattr(app, 'OpenCompany'):
+                    logger.debug("Trying OpenCompany...")
+                    app.OpenCompany(data_path)
+                else:
+                    logger.debug("No OpenCompany method, assuming already connected")
                 
-                if app is not None:
-                    logger.info(f"Got Application object!")
-                    methods = [m for m in dir(app) if not m.startswith('_')]
-                    logger.debug(f"App methods: {methods[:15]}...")
-                    
-                    # Check if app has company-related methods
-                    if 'Customers' in methods or 'SalesOrders' in methods or 'Company' in methods:
-                        self._company = app
-                        self._connected = True
-                        logger.info(f"Connected! App has data access methods.")
-                        return True
-                    
-                    # Try to open company via Application
-                    for method_name in ['OpenCompany', 'Open', 'SelectCompany']:
-                        if hasattr(app, method_name):
-                            try:
-                                logger.debug(f"Trying app.{method_name}({data_path})...")
-                                getattr(app, method_name)(data_path)
-                                self._company = app
-                                self._connected = True
-                                logger.info(f"Connected via {method_name}: {data_path}")
-                                return True
-                            except Exception as e_open:
-                                logger.debug(f"app.{method_name} failed: {e_open}")
-                    
-                    # The app might already be connected after GetApplication
-                    self._company = app
-                    self._connected = True
-                    logger.info(f"Connected via GetApplication (assuming connected)")
-                    return True
+                self._company = app
+                self._connected = True
+                logger.info(f"Connected and company opened: {data_path}")
+                return True
                 
             except Exception as e1:
-                logger.debug(f"GetApplication approach failed completely: {e1}")
+                logger.error(f"SDK connection failed: {e1}")
+                logger.debug(f"Full error: {e1}")
             
-            # Try 2: EnsureDispatch for early binding (gets full type library)
+            # Try 2: EnsureDispatch for early binding with GetApplication
             try:
                 logger.debug("Trying EnsureDispatch (early binding)...")
-                self._login = win32com.client.gencache.EnsureDispatch("PeachtreeAccounting.Login.31")
-                methods = [m for m in dir(self._login) if not m.startswith('_')]
-                logger.debug(f"EnsureDispatch methods: {methods[:15]}...")
+                login = win32com.client.gencache.EnsureDispatch("PeachtreeAccounting.Login.31")
+                methods = [m for m in dir(login) if not m.startswith('_')]
+                logger.debug(f"EnsureDispatch Login methods: {methods[:15]}...")
                 
-                # Try Open method
-                if hasattr(self._login, 'Open'):
-                    self._company = self._login.Open(data_path)
+                # Must use GetApplication to get the Application object
+                if hasattr(login, 'GetApplication'):
+                    logger.debug(f"Calling GetApplication with ({com_username}, ***)")
+                    app = login.GetApplication(com_username, com_password)
+                    
+                    if app is None:
+                        raise Exception("EnsureDispatch GetApplication returned None")
+                    
+                    app_type = str(type(app))
+                    logger.debug(f"EnsureDispatch got: {app_type}")
+                    
+                    if 'ILogin' in app_type:
+                        raise Exception("EnsureDispatch GetApplication returned Login instead of App")
+                    
+                    # Open company
+                    if hasattr(app, 'OpenCompany'):
+                        logger.debug(f"Opening company: {data_path}")
+                        app.OpenCompany(data_path)
+                    
+                    self._login = login
+                    self._company = app
                     self._connected = True
-                    logger.info(f"Connected via EnsureDispatch.Open: {data_path}")
+                    logger.info(f"Connected via EnsureDispatch.GetApplication: {data_path}")
                     return True
                     
             except Exception as e2:
                 logger.debug(f"EnsureDispatch failed: {e2}")
             
-            # Try 3: Invoke method directly (late binding workaround)
+            # Try 3: Direct late binding with credentials
             try:
-                logger.debug("Trying Invoke approach...")
-                # Invoke(name, PAKID, PAKID, ...)
-                result = self._login.Invoke("Open", data_path)
-                if result:
-                    self._company = result
+                logger.debug("Trying direct late binding with GetApplication...")
+                login = win32com.client.Dispatch("PeachtreeAccounting.Login")
+                app = login.GetApplication(com_username, com_password)
+                
+                if app and 'ILogin' not in str(type(app)):
+                    if hasattr(app, 'OpenCompany'):
+                        app.OpenCompany(data_path)
+                    self._login = login
+                    self._company = app
                     self._connected = True
-                    logger.info(f"Connected via Invoke: {data_path}")
+                    logger.info(f"Connected via late binding: {data_path}")
                     return True
             except Exception as e3:
-                logger.debug(f"Invoke failed: {e3}")
+                logger.debug(f"Late binding failed: {e3}")
             
             # Try 4: Use LoginSelector.GetLogin()
             try:
@@ -257,11 +292,16 @@ class SageSDK:
                 login = selector.GetLogin()
                 if login:
                     self._login = login
-                    app = login.GetApplication()
-                    self._company = app
-                    self._connected = True
-                    logger.info(f"Connected via LoginSelector.GetLogin: {data_path}")
-                    return True
+                    # Must pass credentials to GetApplication
+                    app = login.GetApplication(com_username, com_password)
+                    
+                    if app and 'ILogin' not in str(type(app)):
+                        if hasattr(app, 'OpenCompany'):
+                            app.OpenCompany(data_path)
+                        self._company = app
+                        self._connected = True
+                        logger.info(f"Connected via LoginSelector.GetLogin: {data_path}")
+                        return True
             except Exception as e4:
                 logger.debug(f"LoginSelector.GetLogin failed: {e4}")
             
