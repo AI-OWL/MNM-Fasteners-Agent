@@ -256,7 +256,7 @@ class ReportGenerator:
         filename = f"sync_report_{report.report_type}_{timestamp}.txt"
         filepath = self.output_dir / filename
         
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(report.success_summary)
         
         logger.info(f"Report saved: {filepath}")
