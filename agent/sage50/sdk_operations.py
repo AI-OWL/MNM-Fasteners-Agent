@@ -167,9 +167,39 @@ class SageSDK:
             com_username = self.config.sage50_username or "Peachtree"
             com_password = self.config.sage50_password or ""
             
-            # Company credentials (regular Sage login - might be needed for OpenCompanySecure)
-            # For now we'll try OpenCompany first (no company-level auth)
+            # Try 0: Connect to ALREADY RUNNING Sage 50 instance (skip auth if user is logged in)
+            running_prog_ids = [
+                "Peachtree.Application",
+                "PeachtreeAccounting.Application",
+                "PeachtreeAccounting.Application.31",
+                "Sage50.Application",
+            ]
             
+            for prog_id in running_prog_ids:
+                try:
+                    logger.debug(f"Trying to connect to running instance: {prog_id}")
+                    import win32com.client
+                    
+                    # GetActiveObject connects to an existing running COM instance
+                    app = win32com.client.GetActiveObject(prog_id)
+                    
+                    if app:
+                        app_type = str(type(app))
+                        logger.info(f"Connected to running Sage 50 via {prog_id}! Type: {app_type}")
+                        
+                        # Check if it has the methods we need
+                        if hasattr(app, 'Customers') or hasattr(app, 'SalesOrders'):
+                            self._company = app
+                            self._connected = True
+                            logger.info("Successfully attached to running Sage 50!")
+                            return True
+                        else:
+                            logger.debug("Running instance doesn't have expected methods")
+                            
+                except Exception as e0:
+                    logger.debug(f"Could not connect to {prog_id}: {e0}")
+            
+            # Try 1: Standard GetApplication approach
             try:
                 logger.debug(f"Step 1: GetApplication with COM credentials (user={com_username})...")
                 app = self._login.GetApplication(com_username, com_password)
