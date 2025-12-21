@@ -949,7 +949,7 @@ class SageSDK:
             # Try to export item list filtered to this ID
             from Interop.PeachwServer import PeachwIEObj, PeachwIEFileType
             
-            exporter = self._company.CreateExporter(PeachwIEObj.peachwIEObjItemList)
+            exporter = self._company.CreateExporter(PeachwIEObj.peachwIEObjInventoryItemsList)
             
             # Set filter for item ID
             exporter.SetSelectField("ItemID", item_id, item_id)
@@ -978,6 +978,8 @@ class SageSDK:
             raise SageSDKError("pythonnet not available for item creation")
         
         from Interop.PeachwServer import PeachwIEObj, PeachwIEFileType
+        
+        # Use correct enum: peachwIEObjInventoryItemsList
         
         # Create item XML
         root = ET.Element("PAW_ItemList")
@@ -1012,8 +1014,8 @@ class SageSDK:
         tree.write(str(temp_path), encoding="utf-8", xml_declaration=True)
         
         try:
-            # Import item
-            importer = self._company.CreateImporter(PeachwIEObj.peachwIEObjItemList)
+            # Import item using correct enum
+            importer = self._company.CreateImporter(PeachwIEObj.peachwIEObjInventoryItemsList)
             importer.SetFilename(str(temp_path))
             importer.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
             importer.Import()
