@@ -1531,6 +1531,7 @@ class SageSDK:
     
     def _parse_excel_order(self, order_id, rows) -> 'Order':
         """Parse Excel rows into an Order object."""
+        import pandas as pd
         from agent.models import Order, OrderLine, Platform
         
         # Get first row for header info
