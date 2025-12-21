@@ -710,18 +710,24 @@ class SageSDK:
             platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
             platform = str(order.source_platform).replace("Platform.", "")
             
-            # Generate customer ID
-            name = order.customer_name or "CUSTOMER"
-            customer_id = name[:14].upper().replace(" ", "")
-            if order.amazon_order_id:
-                customer_id = "AMZ-" + customer_id[:10]
-            elif order.ebay_order_id:
-                customer_id = "EBY-" + customer_id[:10]
-            elif order.shopify_order_id:
-                customer_id = "SHP-" + customer_id[:10]
+            # Use customer ID from order if set (e.g., from Excel import)
+            # Otherwise generate one
+            customer_id = getattr(order, '_sage_customer_id', None)
+            if not customer_id:
+                name = order.customer_name or "CUSTOMER"
+                customer_id = name[:14].upper().replace(" ", "")
+                if order.amazon_order_id:
+                    customer_id = "AMZ-" + customer_id[:10]
+                elif order.ebay_order_id:
+                    customer_id = "EBY-" + customer_id[:10]
+                elif order.shopify_order_id:
+                    customer_id = "SHP-" + customer_id[:10]
             
             # Generate invoice number from platform order ID
             invoice_number = platform_id[:20] if platform_id else f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            
+            # Ensure customer exists (auto-create if needed)
+            customer_id = self._ensure_customer_exists(customer_id, order)
             
             # Create XML file for import
             xml_path = self._create_invoice_xml(order, customer_id, invoice_number)
@@ -749,6 +755,156 @@ class SageSDK:
         except Exception as e:
             logger.error(f"Failed to create order (Peachtree): {e}")
             raise SageSDKError(f"Failed to create order: {e}")
+    
+    def _ensure_customer_exists(self, customer_id: str, order: Order) -> str:
+        """
+        Check if customer exists in Sage, create if not.
+        
+        Returns the customer ID (may be modified if auto-created).
+        """
+        if not customer_id:
+            # Generate customer ID from name
+            name = order.customer_name or "CUSTOMER"
+            customer_id = name[:14].upper().replace(" ", "")
+        
+        # Try to check if customer exists by attempting an export filter
+        # If that fails, we'll try to create the customer
+        try:
+            if self._customer_exists(customer_id):
+                logger.debug(f"Customer {customer_id} exists")
+                return customer_id
+        except Exception as e:
+            logger.debug(f"Could not check if customer exists: {e}")
+        
+        # Customer doesn't exist - create them
+        logger.info(f"Customer {customer_id} not found, creating...")
+        try:
+            self._create_customer(customer_id, order)
+            logger.info(f"Created customer: {customer_id}")
+        except Exception as e:
+            logger.warning(f"Could not create customer {customer_id}: {e}")
+            # Continue anyway - the import might still work if customer exists
+        
+        return customer_id
+    
+    def _customer_exists(self, customer_id: str) -> bool:
+        """Check if a customer ID exists in Sage."""
+        if not HAS_PYTHONNET or not self._company:
+            return False  # Assume exists if we can't check
+        
+        try:
+            from Interop.PeachwServer import Export, PeachwIEObj, PeachwIEFileType, PeachwIEObjCustomerListField, PeachwIEFilterOperation
+            
+            # Create exporter for customer list with filter
+            exporter = Export(self._company.CreateExporter(PeachwIEObj.peachwIEObjCustomerList))
+            exporter.ClearExportFieldList()
+            exporter.AddToExportFieldList(int(PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerId))
+            
+            # Filter by customer ID
+            exporter.SetFilterValue(
+                int(PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerId),
+                PeachwIEFilterOperation.peachwIEFilterOperationEqual,
+                customer_id,
+                customer_id
+            )
+            
+            # Export to temp file
+            temp_path = Path(tempfile.gettempdir()) / f"cust_check_{customer_id}.xml"
+            exporter.SetFilename(str(temp_path))
+            exporter.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
+            exporter.Export()
+            
+            # Check if any results
+            if temp_path.exists():
+                content = temp_path.read_text()
+                temp_path.unlink()
+                # If the XML contains the customer ID, they exist
+                return customer_id in content
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Customer check failed: {e}")
+            return False  # Assume doesn't exist
+    
+    def _create_customer(self, customer_id: str, order: Order):
+        """Create a new customer in Sage via XML import."""
+        if not HAS_PYTHONNET or not self._company:
+            raise SageSDKError("pythonnet not available for customer creation")
+        
+        from Interop.PeachwServer import Import, PeachwIEObj, PeachwIEFileType, PeachwIEObjCustomerListField
+        
+        # Create customer XML
+        root = ET.Element("PAW_Customers")
+        root.set("xmlns:paw", "urn:schemas-peachtree-com/paw8.02-datatypes")
+        root.set("xmlns:xsi", "http://www.w3.org/2000/10/XMLSchema-instance")
+        
+        customer = ET.SubElement(root, "PAW_Customer")
+        
+        # Customer ID
+        id_elem = ET.SubElement(customer, "ID")
+        id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        id_elem.text = customer_id
+        
+        # Customer Name
+        ET.SubElement(customer, "Name").text = (order.customer_name or customer_id)[:40]
+        
+        # Bill To Address
+        bill_to = ET.SubElement(customer, "BillToAddress")
+        ET.SubElement(bill_to, "Line1").text = (order.ship_address_1 or "")[:40]
+        ET.SubElement(bill_to, "Line2").text = (order.ship_address_2 or "")[:40]
+        ET.SubElement(bill_to, "City").text = (order.ship_city or "")[:25]
+        ET.SubElement(bill_to, "State").text = (order.ship_state or "")[:2]
+        ET.SubElement(bill_to, "Zip").text = (order.ship_postcode or "")[:12]
+        
+        # Ship To Address (same as bill to)
+        ship_to = ET.SubElement(customer, "ShipToAddress")
+        ET.SubElement(ship_to, "Line1").text = (order.ship_address_1 or "")[:40]
+        ET.SubElement(ship_to, "Line2").text = (order.ship_address_2 or "")[:40]
+        ET.SubElement(ship_to, "City").text = (order.ship_city or "")[:25]
+        ET.SubElement(ship_to, "State").text = (order.ship_state or "")[:2]
+        ET.SubElement(ship_to, "Zip").text = (order.ship_postcode or "")[:12]
+        
+        # Contact info
+        if order.customer_email:
+            ET.SubElement(customer, "E_Mail").text = order.customer_email[:50]
+        if order.customer_phone:
+            ET.SubElement(customer, "Telephone1").text = order.customer_phone[:20]
+        
+        # Write to temp file
+        temp_path = Path(tempfile.gettempdir()) / f"customer_{customer_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.xml"
+        tree = ET.ElementTree(root)
+        tree.write(str(temp_path), encoding="utf-8", xml_declaration=True)
+        
+        try:
+            # Import customer
+            importer = Import(self._company.CreateImporter(PeachwIEObj.peachwIEObjCustomerList))
+            importer.ClearImportFieldList()
+            
+            # Add fields
+            fields = [
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerId,
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerName,
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToAddressLine1,
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToAddressLine2,
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToCity,
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToState,
+                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToZip,
+            ]
+            
+            for field in fields:
+                importer.AddToImportFieldList(int(field))
+            
+            importer.SetFilename(str(temp_path))
+            importer.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
+            importer.Import()
+            
+        finally:
+            # Clean up
+            try:
+                temp_path.unlink()
+            except:
+                pass
     
     def _create_invoice_xml(self, order: Order, customer_id: str, invoice_number: str) -> str:
         """
@@ -796,10 +952,11 @@ class SageSDK:
         ET.SubElement(invoice, "State").text = (order.ship_state or "")[:2]
         ET.SubElement(invoice, "Zip").text = (order.ship_postcode or "")[:12]
         
-        # AR Account - use default if not specified
+        # AR Account - configurable, default 1100
+        ar_account_id = getattr(self.config, 'sage_ar_account', None) or "1100"
         ar_acct = ET.SubElement(invoice, "Accounts_Receivable_Account")
         ar_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-        ar_acct.text = "11000"  # Standard AR account - may need config
+        ar_acct.text = ar_account_id
         
         # AR Amount (total)
         ET.SubElement(invoice, "Accounts_Receivable_Amount").text = f"{total:.2f}"
@@ -827,10 +984,11 @@ class SageSDK:
             
             ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
             
-            # GL Account for sales - may need config
+            # GL Account for sales - configurable, default 4100
+            sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
             gl_acct = ET.SubElement(sales_line, "GL_Account")
             gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-            gl_acct.text = "40000"  # Standard Sales account
+            gl_acct.text = sales_account_id
             
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
@@ -856,7 +1014,7 @@ class SageSDK:
             
             ship_gl = ET.SubElement(ship_line, "GL_Account")
             ship_gl.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-            ship_gl.text = "40000"
+            ship_gl.text = sales_account_id  # Use same sales account for shipping
             
             ET.SubElement(ship_line, "Unit_Price").text = f"{-order.shipping_cost:.2f}"
             ET.SubElement(ship_line, "Tax_Type").text = "1"  # Shipping usually non-taxable
@@ -1298,4 +1456,172 @@ class SageSDK:
             
         except Exception as e:
             return {"success": False, "error": str(e)}
+    
+    def import_orders_from_excel(self, excel_path: str) -> dict:
+        """
+        Import orders from an Excel file (Amazon/eBay/Shopify format).
+        
+        Expected columns:
+        - Date of Order, E-Commerce Order#, Sales Order#, Ship Date
+        - Amount, Qty, Unit of Measure, Unit Price, Item ID
+        - Customer ID, Ship to Name, Address Line 1, Address Line 2
+        - City, State, Zipcode, Receivable amount
+        - # of Line Items Ordered, GL Amount, Tax Type, Description
+        
+        Args:
+            excel_path: Path to the Excel file
+            
+        Returns:
+            Dict with success count, failed count, and details
+        """
+        if not self._connected:
+            return {"success": False, "error": "Not connected to Sage"}
+        
+        try:
+            import pandas as pd
+            
+            # Read Excel file
+            df = pd.read_excel(excel_path)
+            logger.info(f"Read {len(df)} rows from {excel_path}")
+            logger.debug(f"Columns: {list(df.columns)}")
+            
+            results = {
+                "success": True,
+                "total_rows": len(df),
+                "imported": 0,
+                "failed": 0,
+                "errors": [],
+            }
+            
+            # Group by order number (E-Commerce Order# or Sales Order#)
+            order_col = None
+            for col in ['E-Commerce Order#', 'Sales Order#', 'Order Number', 'Order#']:
+                if col in df.columns:
+                    order_col = col
+                    break
+            
+            if not order_col:
+                # Treat each row as a separate order
+                order_col = 'row_index'
+                df['row_index'] = range(len(df))
+            
+            # Process each unique order
+            for order_id, order_rows in df.groupby(order_col):
+                try:
+                    order = self._parse_excel_order(order_id, order_rows)
+                    result = self._create_sales_order_peachtree(order)
+                    
+                    if result.get("success"):
+                        results["imported"] += 1
+                        logger.info(f"Imported order {order_id}")
+                    else:
+                        results["failed"] += 1
+                        results["errors"].append(f"{order_id}: {result.get('error', 'Unknown error')}")
+                        
+                except Exception as e:
+                    results["failed"] += 1
+                    results["errors"].append(f"{order_id}: {str(e)}")
+                    logger.error(f"Failed to import order {order_id}: {e}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Excel import failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _parse_excel_order(self, order_id, rows) -> 'Order':
+        """Parse Excel rows into an Order object."""
+        from agent.models import Order, OrderLine, Platform
+        
+        # Get first row for header info
+        first_row = rows.iloc[0]
+        
+        # Parse date
+        order_date = datetime.now()
+        for date_col in ['Date of Order', 'Order Date', 'Date']:
+            if date_col in rows.columns and pd.notna(first_row.get(date_col)):
+                try:
+                    order_date = pd.to_datetime(first_row[date_col])
+                except:
+                    pass
+                break
+        
+        # Get customer ID
+        customer_id = None
+        for cust_col in ['Customer ID', 'CustomerID', 'Cust ID']:
+            if cust_col in rows.columns and pd.notna(first_row.get(cust_col)):
+                customer_id = str(first_row[cust_col])
+                break
+        
+        # Create order
+        order = Order(
+            order_date=order_date,
+            customer_name=str(first_row.get('Ship to Name', ''))[:40] if pd.notna(first_row.get('Ship to Name')) else '',
+            ship_name=str(first_row.get('Ship to Name', ''))[:40] if pd.notna(first_row.get('Ship to Name')) else '',
+            ship_address_1=str(first_row.get('Address Line 1', ''))[:40] if pd.notna(first_row.get('Address Line 1')) else '',
+            ship_address_2=str(first_row.get('Address Line 2', ''))[:40] if pd.notna(first_row.get('Address Line 2')) else '',
+            ship_city=str(first_row.get('City', ''))[:25] if pd.notna(first_row.get('City')) else '',
+            ship_state=str(first_row.get('State', ''))[:2] if pd.notna(first_row.get('State')) else '',
+            ship_postcode=str(first_row.get('Zipcode', first_row.get('Zip', '')))[:12] if pd.notna(first_row.get('Zipcode', first_row.get('Zip'))) else '',
+            source_platform=Platform.AMAZON,  # Default, can be detected from order format
+        )
+        
+        # Set platform order ID
+        ecom_order = str(order_id) if order_id else None
+        if ecom_order:
+            order.amazon_order_id = ecom_order  # Use as reference
+        
+        # Store customer ID for import (will use existing customer)
+        order._sage_customer_id = customer_id
+        
+        # Parse line items
+        for _, row in rows.iterrows():
+            qty = 1
+            for qty_col in ['Qty', 'Quantity', 'QTY']:
+                if qty_col in rows.columns and pd.notna(row.get(qty_col)):
+                    try:
+                        qty = int(float(row[qty_col]))
+                    except:
+                        qty = 1
+                    break
+            
+            unit_price = 0.0
+            for price_col in ['Unit Price', 'UnitPrice', 'Price']:
+                if price_col in rows.columns and pd.notna(row.get(price_col)):
+                    try:
+                        unit_price = float(row[price_col])
+                    except:
+                        unit_price = 0.0
+                    break
+            
+            item_id = ""
+            for item_col in ['Item ID', 'ItemID', 'Item', 'SKU']:
+                if item_col in rows.columns and pd.notna(row.get(item_col)):
+                    item_id = str(row[item_col])[:20]
+                    break
+            
+            description = ""
+            for desc_col in ['Description', 'Desc', 'Item Description']:
+                if desc_col in rows.columns and pd.notna(row.get(desc_col)):
+                    description = str(row[desc_col])[:160]
+                    break
+            
+            if qty > 0 and (unit_price > 0 or item_id):
+                order.lines.append(OrderLine(
+                    sku=item_id,
+                    description=description,
+                    quantity=qty,
+                    unit_price=unit_price,
+                ))
+        
+        # Set total from Amount or Receivable amount
+        for amt_col in ['Amount', 'Receivable amount', 'Total']:
+            if amt_col in rows.columns:
+                try:
+                    order.total = float(first_row[amt_col])
+                except:
+                    pass
+                break
+        
+        return order
 

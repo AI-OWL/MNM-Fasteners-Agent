@@ -32,6 +32,8 @@ class AgentConfig:
     sage50_username: str = ""
     sage50_password: str = ""
     sage50_odbc_dsn: str = ""  # ODBC Data Source Name
+    sage_ar_account: str = "1100"  # Accounts Receivable GL account
+    sage_sales_account: str = "4100"  # Sales/Income GL account
     
     # === Carrier API Credentials ===
     # FedEx
@@ -116,6 +118,8 @@ class AgentConfig:
             sage50_username=os.getenv("SAGE_USERNAME", os.getenv("SAGE50_USERNAME", "")),
             sage50_password=os.getenv("SAGE_PASSWORD", os.getenv("SAGE50_PASSWORD", "")),
             sage50_odbc_dsn=os.getenv("SAGE_ODBC_DSN", ""),
+            sage_ar_account=os.getenv("SAGE_AR_ACCOUNT", "1100"),
+            sage_sales_account=os.getenv("SAGE_SALES_ACCOUNT", "4100"),
             
             # FedEx
             fedex_client_id=os.getenv("FEDEX_CLIENT_ID", ""),
