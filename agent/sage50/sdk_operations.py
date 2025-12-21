@@ -732,6 +732,11 @@ class SageSDK:
             # Ensure customer exists (auto-create if needed)
             customer_id = self._ensure_customer_exists(customer_id, order)
             
+            # Ensure all items exist (auto-create if needed)
+            for line in order.lines:
+                if line.sku:
+                    self._ensure_item_exists(line.sku, line.description)
+            
             # Create XML file for import
             xml_path = self._create_invoice_xml(order, customer_id, invoice_number)
             
@@ -904,6 +909,118 @@ class SageSDK:
             
         finally:
             # Clean up
+            try:
+                temp_path.unlink()
+            except:
+                pass
+    
+    def _ensure_item_exists(self, item_id: str, description: str = "") -> str:
+        """
+        Check if item exists in Sage, create if not.
+        Returns the item ID.
+        """
+        if not item_id or item_id in ("ITEM", "UNKNOWN"):
+            return item_id
+        
+        # Check if item exists
+        try:
+            if self._item_exists(item_id):
+                logger.debug(f"Item {item_id} exists")
+                return item_id
+        except Exception as e:
+            logger.debug(f"Could not check if item exists: {e}")
+        
+        # Item doesn't exist - create it
+        logger.info(f"Item {item_id} not found, creating...")
+        try:
+            self._create_item(item_id, description)
+            logger.info(f"Created item: {item_id}")
+        except Exception as e:
+            logger.warning(f"Could not create item {item_id}: {e}")
+        
+        return item_id
+    
+    def _item_exists(self, item_id: str) -> bool:
+        """Check if an item exists in Sage."""
+        if not HAS_PYTHONNET or not self._company:
+            return False
+        
+        try:
+            # Try to export item list filtered to this ID
+            from Interop.PeachwServer import PeachwIEObj, PeachwIEFileType
+            
+            exporter = self._company.CreateExporter(PeachwIEObj.peachwIEObjItemList)
+            
+            # Set filter for item ID
+            exporter.SetSelectField("ItemID", item_id, item_id)
+            
+            # Export to temp file
+            temp_path = Path(tempfile.gettempdir()) / f"item_check_{item_id}.xml"
+            exporter.SetFilename(str(temp_path))
+            exporter.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
+            exporter.Export()
+            
+            # Check if any results
+            if temp_path.exists():
+                content = temp_path.read_text()
+                temp_path.unlink()
+                return item_id in content
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Item check failed: {e}")
+            return False
+    
+    def _create_item(self, item_id: str, description: str = ""):
+        """Create a new item in Sage via XML import."""
+        if not HAS_PYTHONNET or not self._company:
+            raise SageSDKError("pythonnet not available for item creation")
+        
+        from Interop.PeachwServer import PeachwIEObj, PeachwIEFileType
+        
+        # Create item XML
+        root = ET.Element("PAW_ItemList")
+        root.set("xmlns:paw", "urn:schemas-peachtree-com/paw8.02-datatypes")
+        root.set("xmlns:xsi", "http://www.w3.org/2000/10/XMLSchema-instance")
+        
+        item = ET.SubElement(root, "PAW_Item")
+        
+        # Item ID
+        id_elem = ET.SubElement(item, "ItemID")
+        id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        id_elem.text = item_id[:20]
+        
+        # Description
+        ET.SubElement(item, "Description").text = (description or item_id)[:160]
+        
+        # Item Class - Non-stock (service item that doesn't track inventory)
+        ET.SubElement(item, "ItemClass").text = "Non-stock"
+        
+        # Default price (0 - will use price from invoice)
+        ET.SubElement(item, "SalesPrice1").text = "0.00"
+        
+        # GL Account for sales
+        sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
+        gl_acct = ET.SubElement(item, "GLSalesAccount")
+        gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        gl_acct.text = sales_account_id
+        
+        # Write to temp file
+        temp_path = Path(tempfile.gettempdir()) / f"item_{item_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.xml"
+        tree = ET.ElementTree(root)
+        tree.write(str(temp_path), encoding="utf-8", xml_declaration=True)
+        
+        try:
+            # Import item
+            importer = self._company.CreateImporter(PeachwIEObj.peachwIEObjItemList)
+            importer.SetFilename(str(temp_path))
+            importer.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
+            importer.Import()
+            
+            logger.debug(f"Item {item_id} created successfully")
+            
+        finally:
             try:
                 temp_path.unlink()
             except:
@@ -1587,30 +1704,17 @@ class SageSDK:
             except:
                 pass
         
-        # Get platform from Customer ID column (Amazon/Shopify/eBay)
-        platform_raw = get_val(first_row, cust_col) if cust_col else ''
-        if platform_raw and platform_raw.endswith('.0'):
-            platform_raw = platform_raw[:-2]
+        # Get Customer ID directly from Excel (Amazon/Shopify/eBay)
+        customer_id = get_val(first_row, cust_col) if cust_col else 'Amazon'
+        if customer_id and customer_id.endswith('.0'):
+            customer_id = customer_id[:-2]
+        if not customer_id:
+            customer_id = 'Amazon'
         
-        # Get customer name
+        # Get customer name (for invoice ship-to info)
         customer_name = get_val(first_row, name_col)[:40] if name_col else ''
         
-        # Generate unique customer ID from platform + customer name
-        # e.g., "AMZN-JOHNSMITH", "EBAY-JANEDOE"
-        platform_prefix = {
-            'amazon': 'AMZN',
-            'shopify': 'SHOP',
-            'ebay': 'EBAY',
-        }.get(platform_raw.lower(), platform_raw[:4].upper()) if platform_raw else 'CUST'
-        
-        # Clean customer name for ID (alphanumeric only)
-        name_part = ''.join(c for c in customer_name if c.isalnum()).upper()[:10]
-        if not name_part:
-            name_part = 'CUSTOMER'
-        
-        customer_id = f"{platform_prefix}-{name_part}"
-        
-        logger.info(f"Order {order_id}: Platform='{platform_raw}', Name='{customer_name}' -> Customer ID='{customer_id}'")
+        logger.info(f"Order {order_id}: Customer ID='{customer_id}', Name='{customer_name}'")
         
         # Get phone number
         customer_phone = get_val(first_row, phone_col)[:20] if phone_col else ''
