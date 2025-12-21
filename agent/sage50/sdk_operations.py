@@ -711,17 +711,20 @@ class SageSDK:
             platform = str(order.source_platform).replace("Platform.", "")
             
             # Use customer ID from order if set (e.g., from Excel import)
-            # Otherwise generate one
+            # Otherwise generate one from customer NAME
             customer_id = getattr(order, '_sage_customer_id', None)
-            if not customer_id:
+            
+            # Log what we got from Excel
+            logger.debug(f"Customer ID from Excel: '{customer_id}'")
+            
+            if not customer_id or customer_id.strip() == '':
+                # Generate customer ID from customer name, NOT platform
                 name = order.customer_name or "CUSTOMER"
-                customer_id = name[:14].upper().replace(" ", "")
-                if order.amazon_order_id:
-                    customer_id = "AMZ-" + customer_id[:10]
-                elif order.ebay_order_id:
-                    customer_id = "EBY-" + customer_id[:10]
-                elif order.shopify_order_id:
-                    customer_id = "SHP-" + customer_id[:10]
+                # Remove special chars and spaces, take first 14 chars
+                customer_id = ''.join(c for c in name if c.isalnum())[:14].upper()
+                if not customer_id:
+                    customer_id = "CUST"
+                logger.info(f"Generated customer ID '{customer_id}' from name '{name}'")
             
             # Generate invoice number from platform order ID
             invoice_number = platform_id[:20] if platform_id else f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -993,8 +996,11 @@ class SageSDK:
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
             
-            # Tax Type (2 = Taxable, 1 = Non-taxable)
-            ET.SubElement(sales_line, "Tax_Type").text = "2"
+            # Tax Type: 1 = Non-taxable (per spec)
+            ET.SubElement(sales_line, "Tax_Type").text = "1"
+            
+            # Sales Tax ID: exempt (per spec)
+            ET.SubElement(sales_line, "Sales_Tax_ID").text = "exempt"
             
             # Amount (NEGATIVE for sales)
             line_amount = line.quantity * line.unit_price
@@ -1017,7 +1023,8 @@ class SageSDK:
             ship_gl.text = sales_account_id  # Use same sales account for shipping
             
             ET.SubElement(ship_line, "Unit_Price").text = f"{-order.shipping_cost:.2f}"
-            ET.SubElement(ship_line, "Tax_Type").text = "1"  # Shipping usually non-taxable
+            ET.SubElement(ship_line, "Tax_Type").text = "1"  # Non-taxable per spec
+            ET.SubElement(ship_line, "Sales_Tax_ID").text = "exempt"  # Per spec
             ET.SubElement(ship_line, "Amount").text = f"{-order.shipping_cost:.2f}"
         
         # Write to temp file
@@ -1536,93 +1543,146 @@ class SageSDK:
         
         # Get first row for header info
         first_row = rows.iloc[0]
+        columns = list(rows.columns)
+        
+        # Helper to find column by partial match (case-insensitive)
+        def find_col(search_terms):
+            for term in search_terms:
+                for col in columns:
+                    if term.lower() in str(col).lower():
+                        return col
+            return None
+        
+        # Helper to get value safely
+        def get_val(row, col, default=''):
+            if col and col in row.index:
+                val = row[col]
+                if pd.notna(val):
+                    return str(val).strip()
+            return default
+        
+        # Find column mappings
+        date_col = find_col(['Date of Order', 'Order Date', 'Date'])
+        cust_col = find_col(['Customer ID', 'CustomerID', 'Cust ID'])
+        name_col = find_col(['Ship to Name', 'ShipToName', 'Customer Name', 'Name'])
+        addr1_col = find_col(['Address Line 1', 'AddressLine1', 'Address1', 'Address'])
+        addr2_col = find_col(['Address Line 2', 'AddressLine2', 'Address2'])
+        city_col = find_col(['City'])
+        state_col = find_col(['State'])
+        zip_col = find_col(['Zipcode', 'Zip', 'ZipCode', 'Postal'])
+        qty_col = find_col(['Qty', 'Quantity'])
+        price_col = find_col(['Unit Price', 'UnitPrice', 'Price'])
+        item_col = find_col(['Item ID', 'ItemID', 'Item', 'SKU', 'Product'])
+        desc_col = find_col(['Description', 'Desc', 'Item Description'])
+        amount_col = find_col(['Amount', 'Receivable amount', 'Total', 'Receivable Amount'])
+        phone_col = find_col(['Customer Phone #', 'Customer Phone', 'Phone', 'Phone #', 'Telephone'])
+        
+        logger.info(f"Column mappings found: Customer ID='{cust_col}', Name='{name_col}', Phone='{phone_col}', Item='{item_col}'")
         
         # Parse date
         order_date = datetime.now()
-        for date_col in ['Date of Order', 'Order Date', 'Date']:
-            if date_col in rows.columns and pd.notna(first_row.get(date_col)):
-                try:
-                    order_date = pd.to_datetime(first_row[date_col])
-                except:
-                    pass
-                break
+        if date_col:
+            try:
+                order_date = pd.to_datetime(first_row[date_col])
+            except:
+                pass
         
-        # Get customer ID
-        customer_id = None
-        for cust_col in ['Customer ID', 'CustomerID', 'Cust ID']:
-            if cust_col in rows.columns and pd.notna(first_row.get(cust_col)):
-                customer_id = str(first_row[cust_col])
-                break
+        # Get platform from Customer ID column (Amazon/Shopify/eBay)
+        platform_raw = get_val(first_row, cust_col) if cust_col else ''
+        if platform_raw and platform_raw.endswith('.0'):
+            platform_raw = platform_raw[:-2]
+        
+        # Get customer name
+        customer_name = get_val(first_row, name_col)[:40] if name_col else ''
+        
+        # Generate unique customer ID from platform + customer name
+        # e.g., "AMZN-JOHNSMITH", "EBAY-JANEDOE"
+        platform_prefix = {
+            'amazon': 'AMZN',
+            'shopify': 'SHOP',
+            'ebay': 'EBAY',
+        }.get(platform_raw.lower(), platform_raw[:4].upper()) if platform_raw else 'CUST'
+        
+        # Clean customer name for ID (alphanumeric only)
+        name_part = ''.join(c for c in customer_name if c.isalnum()).upper()[:10]
+        if not name_part:
+            name_part = 'CUSTOMER'
+        
+        customer_id = f"{platform_prefix}-{name_part}"
+        
+        logger.info(f"Order {order_id}: Platform='{platform_raw}', Name='{customer_name}' -> Customer ID='{customer_id}'")
+        
+        # Get phone number
+        customer_phone = get_val(first_row, phone_col)[:20] if phone_col else ''
         
         # Create order
         order = Order(
             order_date=order_date,
-            customer_name=str(first_row.get('Ship to Name', ''))[:40] if pd.notna(first_row.get('Ship to Name')) else '',
-            ship_name=str(first_row.get('Ship to Name', ''))[:40] if pd.notna(first_row.get('Ship to Name')) else '',
-            ship_address_1=str(first_row.get('Address Line 1', ''))[:40] if pd.notna(first_row.get('Address Line 1')) else '',
-            ship_address_2=str(first_row.get('Address Line 2', ''))[:40] if pd.notna(first_row.get('Address Line 2')) else '',
-            ship_city=str(first_row.get('City', ''))[:25] if pd.notna(first_row.get('City')) else '',
-            ship_state=str(first_row.get('State', ''))[:2] if pd.notna(first_row.get('State')) else '',
-            ship_postcode=str(first_row.get('Zipcode', first_row.get('Zip', '')))[:12] if pd.notna(first_row.get('Zipcode', first_row.get('Zip'))) else '',
-            source_platform=Platform.AMAZON,  # Default, can be detected from order format
+            customer_name=customer_name,
+            customer_phone=customer_phone,
+            ship_name=customer_name,
+            ship_address_1=get_val(first_row, addr1_col)[:40] if addr1_col else '',
+            ship_address_2=get_val(first_row, addr2_col)[:40] if addr2_col else '',
+            ship_city=get_val(first_row, city_col)[:25] if city_col else '',
+            ship_state=get_val(first_row, state_col)[:2] if state_col else '',
+            ship_postcode=get_val(first_row, zip_col)[:12] if zip_col else '',
+            source_platform=Platform.AMAZON,
         )
         
         # Set platform order ID
         ecom_order = str(order_id) if order_id else None
         if ecom_order:
-            order.amazon_order_id = ecom_order  # Use as reference
+            order.amazon_order_id = ecom_order
         
-        # Store customer ID for import (will use existing customer)
+        # Store customer ID for import
         order._sage_customer_id = customer_id
         
         # Parse line items
         for _, row in rows.iterrows():
             qty = 1
-            for qty_col in ['Qty', 'Quantity', 'QTY']:
-                if qty_col in rows.columns and pd.notna(row.get(qty_col)):
-                    try:
-                        qty = int(float(row[qty_col]))
-                    except:
-                        qty = 1
-                    break
+            if qty_col:
+                try:
+                    qty = int(float(row[qty_col])) if pd.notna(row[qty_col]) else 1
+                except:
+                    qty = 1
             
             unit_price = 0.0
-            for price_col in ['Unit Price', 'UnitPrice', 'Price']:
-                if price_col in rows.columns and pd.notna(row.get(price_col)):
-                    try:
-                        unit_price = float(row[price_col])
-                    except:
-                        unit_price = 0.0
-                    break
+            if price_col:
+                try:
+                    unit_price = float(row[price_col]) if pd.notna(row[price_col]) else 0.0
+                except:
+                    unit_price = 0.0
             
             item_id = ""
-            for item_col in ['Item ID', 'ItemID', 'Item', 'SKU']:
-                if item_col in rows.columns and pd.notna(row.get(item_col)):
-                    item_id = str(row[item_col])[:20]
-                    break
+            if item_col and pd.notna(row.get(item_col)):
+                item_id = str(row[item_col]).strip()[:20]
+                # Clean up float-like IDs
+                if item_id.endswith('.0'):
+                    item_id = item_id[:-2]
             
             description = ""
-            for desc_col in ['Description', 'Desc', 'Item Description']:
-                if desc_col in rows.columns and pd.notna(row.get(desc_col)):
-                    description = str(row[desc_col])[:160]
-                    break
+            if desc_col and pd.notna(row.get(desc_col)):
+                description = str(row[desc_col]).strip()[:160]
             
+            logger.debug(f"  Line: item={item_id}, qty={qty}, price={unit_price}")
+            
+            # Add line if we have meaningful data
             if qty > 0 and (unit_price > 0 or item_id):
                 order.lines.append(OrderLine(
-                    sku=item_id,
-                    description=description,
+                    sku=item_id if item_id else "ITEM",
+                    description=description if description else f"Order {order_id} item",
                     quantity=qty,
                     unit_price=unit_price,
                 ))
         
-        # Set total from Amount or Receivable amount
-        for amt_col in ['Amount', 'Receivable amount', 'Total']:
-            if amt_col in rows.columns:
-                try:
-                    order.total = float(first_row[amt_col])
-                except:
-                    pass
-                break
+        # Set total from Amount column
+        if amount_col:
+            try:
+                order.total = float(first_row[amount_col]) if pd.notna(first_row[amount_col]) else 0.0
+            except:
+                pass
+        
+        logger.debug(f"Order {order_id}: {len(order.lines)} lines, customer={order._sage_customer_id}")
         
         return order
 
