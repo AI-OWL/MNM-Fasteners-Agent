@@ -136,8 +136,10 @@ class SageSDK:
             raise SageSDKError("Could not find Interop.PeachwServer.dll")
         
         # Import and create Login object
-        from Interop.PeachwServer import Login
-        self._login = Login()
+        # IMPORTANT: Must cast to Application to expose all methods!
+        from Interop.PeachwServer import Login, Application
+        login = Login()
+        self._login = login
         self._api_type = "peachtree"
         
         # Get credentials
@@ -146,19 +148,22 @@ class SageSDK:
         
         logger.info(f"Connecting with pythonnet (user={username})...")
         
-        # Get Application
-        app = self._login.GetApplication(username, password)
+        # Get Application object and cast to proper type
+        obj = login.GetApplication(username, password)
         
-        if app is None:
+        if obj is None:
             raise SageSDKError("GetApplication returned None")
         
+        # Cast to Application to expose all methods
+        app = Application(obj)
         logger.info(f"Got Application object: {type(app)}")
         
         # Open company if path provided
         data_path = self.config.sage50_company_path
-        if data_path and hasattr(app, 'OpenCompany'):
+        if data_path:
             logger.info(f"Opening company: {data_path}")
             app.OpenCompany(data_path)
+            logger.info(f"Company opened: {app.get_CurrentCompanyName()}")
         
         self._company = app
         self._connected = True
