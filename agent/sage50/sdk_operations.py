@@ -1084,8 +1084,11 @@ class SageSDK:
         
         # GL Account for sales - configurable, default 4100
         sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
+        logger.info(f"Using GL accounts - AR: {ar_account_id}, Sales: {sales_account_id}")
+        logger.info(f"Order has {len(order.lines)} line items")
         
         for line in order.lines:
+            logger.debug(f"  Line: qty={line.quantity}, price={line.unit_price}, sku={line.sku}")
             sales_line = ET.SubElement(sales_lines, "SalesLine")
             
             ET.SubElement(sales_line, "Quantity").text = str(line.quantity)
@@ -1145,7 +1148,11 @@ class SageSDK:
         tree = ET.ElementTree(root)
         tree.write(str(xml_path), encoding="utf-8", xml_declaration=True)
         
+        # Log the XML content for debugging
+        with open(xml_path, 'r', encoding='utf-8') as f:
+            xml_content = f.read()
         logger.debug(f"Created import XML: {xml_path}")
+        logger.debug(f"XML content:\n{xml_content}")
         return str(xml_path)
     
     def _import_sales_journal(self, xml_path: str) -> dict:
