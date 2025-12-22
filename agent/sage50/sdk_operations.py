@@ -1040,8 +1040,11 @@ class SageSDK:
         cust_id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
         cust_id_elem.text = customer_id
         
-        # Customer Name
-        ET.SubElement(invoice, "Customer_Name").text = (order.customer_name or "")[:40]
+        # Customer Name (the platform name)
+        ET.SubElement(invoice, "Customer_Name").text = customer_id
+        
+        # Ship To Name (the actual customer's name - this shows on the invoice)
+        ET.SubElement(invoice, "Ship_To_Name").text = (order.customer_name or "")[:40]
         
         # Date
         date_elem = ET.SubElement(invoice, "Date")
@@ -1695,17 +1698,21 @@ class SageSDK:
             except:
                 pass
         
-        # Get Customer ID directly from Excel (Amazon/Shopify/eBay)
-        customer_id = get_val(first_row, cust_col) if cust_col else 'Amazon'
-        if customer_id and customer_id.endswith('.0'):
-            customer_id = customer_id[:-2]
-        if not customer_id:
-            customer_id = 'Amazon'
+        # Get platform from Customer ID column (Amazon/Shopify/eBay)
+        # This becomes the Customer ID in Sage (one customer per platform)
+        platform = get_val(first_row, cust_col) if cust_col else 'Amazon'
+        if platform and platform.endswith('.0'):
+            platform = platform[:-2]
+        if not platform:
+            platform = 'Amazon'
         
-        # Get customer name (for invoice ship-to info)
+        # Customer ID = just the platform name (AMAZON, EBAY, SHOPIFY)
+        customer_id = platform.upper()[:14]
+        
+        # Get customer name (this goes in Ship To Name field on the invoice)
         customer_name = get_val(first_row, name_col)[:40] if name_col else ''
         
-        logger.info(f"Order {order_id}: Customer ID='{customer_id}', Name='{customer_name}'")
+        logger.info(f"Order {order_id}: Customer ID='{customer_id}', Ship To Name='{customer_name}'")
         
         # Get phone number
         customer_phone = get_val(first_row, phone_col)[:20] if phone_col else ''
