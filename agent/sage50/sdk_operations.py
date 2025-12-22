@@ -1627,7 +1627,9 @@ class SageSDK:
             logger.debug(f"Order column values: {df[order_col].tolist()}")
             
             # Handle NaN values - replace with row index
-            df[order_col] = df[order_col].fillna(df.index.astype(str))
+            for idx in df.index:
+                if pd.isna(df.loc[idx, order_col]):
+                    df.loc[idx, order_col] = f"ROW-{idx}"
             
             unique_orders = df[order_col].nunique()
             logger.info(f"Found {unique_orders} unique orders to process")
