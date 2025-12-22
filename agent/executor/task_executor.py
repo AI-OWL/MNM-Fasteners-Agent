@@ -62,6 +62,12 @@ class TaskExecutor:
             TaskType.SEARCH_PRODUCTS: self._handle_search_products,
             TaskType.BATCH_CREATE_ORDERS: self._handle_batch_create_orders,
             TaskType.SYNC_ORDERS: self._handle_sync_orders,
+            TaskType.SYNC_AMAZON_TO_SAGE: self._handle_sync_amazon,
+            TaskType.SYNC_EBAY_TO_SAGE: self._handle_sync_ebay,
+            TaskType.SYNC_SHOPIFY_TO_SAGE: self._handle_sync_shopify,
+            TaskType.DAILY_MORNING_SYNC: self._handle_daily_sync,
+            TaskType.DAILY_NOON_SYNC: self._handle_daily_sync,
+            TaskType.FULL_SYNC: self._handle_full_sync,
             TaskType.HEALTH_CHECK: self._handle_health_check,
             TaskType.GET_SAGE_STATUS: self._handle_get_sage_status,
         }
@@ -423,6 +429,73 @@ class TaskExecutor:
             "created_order_refs": result.created_order_refs,
             "failed_orders": result.failed_orders,
         }
+    
+    async def _handle_sync_amazon(
+        self, task: Task, log: TaskLogger
+    ) -> dict:
+        """Sync Amazon orders to Sage 50."""
+        return await self._handle_platform_sync("amazon", task, log)
+    
+    async def _handle_sync_ebay(
+        self, task: Task, log: TaskLogger
+    ) -> dict:
+        """Sync eBay orders to Sage 50."""
+        return await self._handle_platform_sync("ebay", task, log)
+    
+    async def _handle_sync_shopify(
+        self, task: Task, log: TaskLogger
+    ) -> dict:
+        """Sync Shopify orders to Sage 50."""
+        return await self._handle_platform_sync("shopify", task, log)
+    
+    async def _handle_platform_sync(
+        self, platform: str, task: Task, log: TaskLogger
+    ) -> dict:
+        """Sync a platform's orders to Sage 50."""
+        from agent.sync_service import SyncService
+        
+        days_back = task.payload.get("days_back", 30)
+        log.info(f"Syncing {platform.upper()} orders (last {days_back} days)")
+        
+        # Create sync service with Sage SDK
+        sync_service = SyncService(self.config, self.sage_ops)
+        
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            sync_service.sync_platform,
+            platform,
+            days_back
+        )
+        
+        return result
+    
+    async def _handle_daily_sync(
+        self, task: Task, log: TaskLogger
+    ) -> dict:
+        """Run daily sync for all platforms."""
+        return await self._handle_full_sync(task, log)
+    
+    async def _handle_full_sync(
+        self, task: Task, log: TaskLogger
+    ) -> dict:
+        """Sync all platforms to Sage 50."""
+        from agent.sync_service import SyncService
+        
+        days_back = task.payload.get("days_back", 30)
+        log.info(f"Running full sync (last {days_back} days)")
+        
+        # Create sync service with Sage SDK
+        sync_service = SyncService(self.config, self.sage_ops)
+        
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            sync_service.sync_all_platforms,
+            days_back
+        )
+        
+        return result
     
     async def _handle_health_check(
         self, task: Task, log: TaskLogger
