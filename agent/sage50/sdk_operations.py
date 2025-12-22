@@ -1623,10 +1623,21 @@ class SageSDK:
                 order_col = 'row_index'
                 df['row_index'] = range(len(df))
             
+            logger.info(f"Using order column: {order_col}")
+            logger.debug(f"Order column values: {df[order_col].tolist()}")
+            
+            # Handle NaN values - replace with row index
+            df[order_col] = df[order_col].fillna(df.index.astype(str))
+            
+            unique_orders = df[order_col].nunique()
+            logger.info(f"Found {unique_orders} unique orders to process")
+            
             # Process each unique order
             for order_id, order_rows in df.groupby(order_col):
+                logger.info(f"Processing order: {order_id} ({len(order_rows)} rows)")
                 try:
                     order = self._parse_excel_order(order_id, order_rows)
+                    logger.debug(f"Parsed order: customer={order.customer_name}, lines={len(order.lines)}")
                     result = self._create_sales_order_peachtree(order)
                     
                     if result.get("success"):
