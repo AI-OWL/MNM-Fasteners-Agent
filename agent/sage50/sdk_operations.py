@@ -1692,23 +1692,25 @@ class SageSDK:
                     return str(val).strip()
             return default
         
-        # Find column mappings
+        # Find column mappings (supports both original format and API format)
         date_col = find_col(['Date of Order', 'Order Date', 'Date'])
-        cust_col = find_col(['Customer ID', 'CustomerID', 'Cust ID'])
+        cust_col = find_col(['Customer ID', 'CustomerID', 'Cust ID', 'Platform'])  # API uses 'Platform'
         name_col = find_col(['Ship to Name', 'ShipToName', 'Customer Name', 'Name'])
-        addr1_col = find_col(['Address Line 1', 'AddressLine1', 'Address1', 'Address'])
+        addr1_col = find_col(['Address Line 1', 'AddressLine1', 'Address1', 'Address', 'Ship To Address'])
         addr2_col = find_col(['Address Line 2', 'AddressLine2', 'Address2'])
         city_col = find_col(['City'])
         state_col = find_col(['State'])
         zip_col = find_col(['Zipcode', 'Zip', 'ZipCode', 'Postal'])
         qty_col = find_col(['Qty', 'Quantity'])
         price_col = find_col(['Unit Price', 'UnitPrice', 'Price'])
-        item_col = find_col(['Item ID', 'ItemID', 'Item', 'SKU', 'Product'])
+        item_col = find_col(['Item ID', 'ItemID', 'SKU', 'Item', 'Product'])  # SKU before Item
         desc_col = find_col(['Description', 'Desc', 'Item Description'])
         amount_col = find_col(['Amount', 'Receivable amount', 'Total', 'Receivable Amount'])
         phone_col = find_col(['Customer Phone #', 'Customer Phone', 'Phone', 'Phone #', 'Telephone'])
+        platform_order_col = find_col(['Platform Order ID', 'Platform Order'])  # API's order ID column
         
-        logger.info(f"Column mappings found: Customer ID='{cust_col}', Name='{name_col}', Phone='{phone_col}', Item='{item_col}'")
+        logger.info(f"Column mappings: Qty='{qty_col}', Price='{price_col}', Item='{item_col}', Desc='{desc_col}'")
+        logger.info(f"Column mappings: Customer ID='{cust_col}', Name='{name_col}', Amount='{amount_col}'")
         
         # Parse date
         order_date = datetime.now()
@@ -1760,7 +1762,9 @@ class SageSDK:
         order._sage_customer_id = customer_id
         
         # Parse line items
-        for _, row in rows.iterrows():
+        logger.debug(f"Parsing {len(rows)} rows for line items")
+        for idx, row in rows.iterrows():
+            logger.debug(f"  Row {idx}: Qty={row.get(qty_col) if qty_col else 'N/A'}, Price={row.get(price_col) if price_col else 'N/A'}, Item={row.get(item_col) if item_col else 'N/A'}")
             qty = 1
             if qty_col:
                 try:
@@ -1797,16 +1801,17 @@ class SageSDK:
                 except:
                     pass
             
-            logger.debug(f"  Line: item={item_id}, qty={qty}, price={unit_price}")
+            logger.debug(f"  Parsed line: item={item_id}, qty={qty}, price={unit_price}, desc={description[:30] if description else 'N/A'}")
             
-            # Add line if we have meaningful data
-            if qty > 0 and (unit_price > 0 or item_id):
+            # Add line if we have meaningful data (qty > 0 and either price, item, or description)
+            if qty > 0 and (unit_price > 0 or item_id or description):
                 order.lines.append(OrderLine(
                     sku=item_id if item_id else "ITEM",
                     description=description if description else f"Order {order_id} item",
                     quantity=qty,
                     unit_price=unit_price,
                 ))
+                logger.debug(f"    -> Added line item")
         
         # Set total from Amount column
         if amount_col:
@@ -1815,7 +1820,17 @@ class SageSDK:
             except:
                 pass
         
-        logger.debug(f"Order {order_id}: {len(order.lines)} lines, customer={order._sage_customer_id}")
+        # Fallback: if no line items but we have Amount, create a single line
+        if len(order.lines) == 0 and order.total > 0:
+            logger.info(f"No line items parsed, creating fallback line from Amount: {order.total}")
+            order.lines.append(OrderLine(
+                sku="SALE",
+                description=f"Order {order_id}",
+                quantity=1,
+                unit_price=order.total,
+            ))
+        
+        logger.info(f"Order {order_id}: {len(order.lines)} lines, customer={order._sage_customer_id}, total={order.total}")
         
         return order
 
