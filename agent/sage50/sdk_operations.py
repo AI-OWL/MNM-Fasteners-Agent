@@ -732,11 +732,15 @@ class SageSDK:
             # Ensure customer exists (auto-create if needed)
             customer_id = self._ensure_customer_exists(customer_id, order)
             
-            # Note: Skipping item creation - using direct GL posting instead of inventory items
-            # This avoids item lookup issues and works for non-inventory sales
+            # In production mode, ensure items exist (they should already be in Sage)
+            use_item_ids = getattr(self.config, 'sage_use_item_ids', False)
+            if use_item_ids:
+                logger.debug("Production mode: Using Item IDs in invoice")
+            else:
+                logger.debug("Simple mode: Using description + GL account (no Item IDs)")
             
             # Create XML file for import
-            xml_path = self._create_invoice_xml(order, customer_id, invoice_number)
+            xml_path = self._create_invoice_xml(order, customer_id, invoice_number, use_item_ids)
             
             # Import using SDK
             result = self._import_sales_journal(xml_path)
@@ -1001,9 +1005,16 @@ class SageSDK:
             except:
                 pass
     
-    def _create_invoice_xml(self, order: Order, customer_id: str, invoice_number: str) -> str:
+    def _create_invoice_xml(self, order: Order, customer_id: str, invoice_number: str, use_item_ids: bool = False) -> str:
         """
         Create XML file in Peachtree format for import.
+        
+        Args:
+            order: Order data
+            customer_id: Sage customer ID
+            invoice_number: Invoice number
+            use_item_ids: If True (production mode), include Item_ID in lines.
+                         If False (simple mode), use description + GL account only.
         
         Format based on Sage SDK sample code.
         Note: Amounts are NEGATIVE for sales (credits to income accounts).
@@ -1076,9 +1087,17 @@ class SageSDK:
             
             ET.SubElement(sales_line, "Quantity").text = str(line.quantity)
             
-            # Use description that includes SKU for reference (skip Item_ID to avoid lookup issues)
-            desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
-            ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
+            if use_item_ids:
+                # Production mode: Use actual Item ID (items must exist in Sage)
+                item_id_elem = ET.SubElement(sales_line, "Item_ID")
+                item_id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+                item_id_elem.text = (line.sku or "ITEM")[:20]
+                
+                ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
+            else:
+                # Simple mode: Include SKU in description (no Item_ID lookup)
+                desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
+                ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
             
             # GL Account for sales
             gl_acct = ET.SubElement(sales_line, "GL_Account")

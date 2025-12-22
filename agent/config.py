@@ -34,6 +34,7 @@ class AgentConfig:
     sage50_odbc_dsn: str = ""  # ODBC Data Source Name
     sage_ar_account: str = "1100"  # Accounts Receivable GL account
     sage_sales_account: str = "4100"  # Sales/Income GL account
+    sage_use_item_ids: bool = False  # True = production mode (use Item IDs), False = simple mode (description only)
     
     # === Carrier API Credentials ===
     # FedEx
@@ -120,6 +121,7 @@ class AgentConfig:
             sage50_odbc_dsn=os.getenv("SAGE_ODBC_DSN", ""),
             sage_ar_account=os.getenv("SAGE_AR_ACCOUNT", "1100"),
             sage_sales_account=os.getenv("SAGE_SALES_ACCOUNT", "4100"),
+            sage_use_item_ids=os.getenv("SAGE_USE_ITEM_IDS", "false").lower() in ("true", "1", "yes"),
             
             # FedEx
             fedex_client_id=os.getenv("FEDEX_CLIENT_ID", ""),
