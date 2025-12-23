@@ -120,9 +120,8 @@ def import_inventory_batch(xml_path: str, app) -> dict:
     )
     
     try:
-        # Create importer for Inventory Items
-        # PeachwIEObj.peachwIEObjInventoryItem = 1
-        importer_obj = app.CreateImporter(PeachwIEObj.peachwIEObjInventoryItem)
+        # Create importer for Inventory Items List
+        importer_obj = app.CreateImporter(PeachwIEObj.peachwIEObjInventoryItemsList)
         importer = Import(importer_obj)
         
         if not importer:
