@@ -25,9 +25,10 @@ def check_sage_setup():
         from Interop.PeachwServer import Login, Application, Export, PeachwIEObj, PeachwIEFileType
         from Interop.PeachwServer import PeachwIEObjCustomerListField, PeachwIEObjChartOfAccountsField
         
-        # Connect to Sage
-        print("Connecting to Sage 50...")
+        # Connect to already-open Sage (no login required)
+        print("Connecting to already-open Sage 50 session...")
         login = Login()
+        # Empty credentials = connect to existing session
         app = Application(login.GetApplication("", ""))
         
         if app.get_CompanyIsOpen():

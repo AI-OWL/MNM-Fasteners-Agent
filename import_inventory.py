@@ -201,7 +201,7 @@ def main():
         print(f"\nFirst 2000 chars of XML:\n{content[:2000]}")
         return
     
-    # Connect to Sage
+    # Connect to already-open Sage (no login required)
     try:
         import clr
         from pathlib import Path as P
@@ -215,16 +215,19 @@ def main():
         
         from Interop.PeachwServer import Login, Application
         
-        print("\nConnecting to Sage 50...")
+        print("\nConnecting to already-open Sage 50 session...")
         login = Login()
+        # Empty credentials = connect to existing session
         app = Application(login.GetApplication("", ""))
         
         if not app.get_CompanyIsOpen():
-            print("ERROR: No company is open in Sage. Please open the test company first.")
+            print("ERROR: No company is open in Sage.")
+            print("Please open Sage 50 and open the test company first.")
             return
         
         company_name = app.get_CompanyName()
         print(f"Connected to: {company_name}")
+        print("(Using existing session - Sage will stay open)")
         
     except ImportError as e:
         print(f"ERROR: pythonnet not installed. Run: pip install pythonnet")
