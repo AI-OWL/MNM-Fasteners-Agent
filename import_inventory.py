@@ -115,36 +115,21 @@ def import_inventory_batch(xml_path: str, app) -> dict:
     
     from Interop.PeachwServer import (
         PeachwIEObj, 
-        PeachwIEObjInventoryItemField,
         PeachwIEFileType,
         Import
     )
     
     try:
         # Create importer for Inventory Items
+        # PeachwIEObj.peachwIEObjInventoryItem = 1
         importer_obj = app.CreateImporter(PeachwIEObj.peachwIEObjInventoryItem)
         importer = Import(importer_obj)
         
         if not importer:
             return {"success": False, "error": "Failed to create importer"}
         
-        # Clear and set up field list
-        importer.ClearImportFieldList()
-        
-        # Add fields to import
-        fields = [
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_ItemId,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_Description,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_ItemClass,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_SalesPrice1,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_LastUnitCost,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_GLSalesAccountId,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_GLInventoryAccountId,
-            PeachwIEObjInventoryItemField.peachwIEObjInventoryItemField_GLCostOfSalesAccountId,
-        ]
-        
-        for field in fields:
-            importer.AddToImportFieldList(int(field))
+        # Don't specify fields - let Sage auto-detect from XML
+        # This is simpler and more reliable
         
         # Set file info
         importer.SetFilename(xml_path)
