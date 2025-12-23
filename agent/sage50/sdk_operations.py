@@ -948,15 +948,19 @@ class SageSDK:
             
             if use_item_ids:
                 # Production mode: Use actual Item ID (items must exist in Sage)
+                item_id = (line.sku or "ITEM")[:20]
+                logger.info(f"  Adding Item_ID: '{item_id}' to invoice")
+                
                 item_id_elem = ET.SubElement(sales_line, "Item_ID")
                 item_id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-                item_id_elem.text = (line.sku or "ITEM")[:20]
+                item_id_elem.text = item_id
                 
                 ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
             else:
                 # Simple mode: Include SKU in description (no Item_ID lookup)
                 desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
+                logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
             
             # GL Account for sales
             gl_acct = ET.SubElement(sales_line, "GL_Account")
