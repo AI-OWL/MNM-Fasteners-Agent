@@ -34,7 +34,7 @@ class AgentConfig:
     sage50_odbc_dsn: str = ""  # ODBC Data Source Name
     sage_ar_account: str = "1100"  # Accounts Receivable GL account
     sage_sales_account: str = "4100"  # Sales/Income GL account
-    sage_use_item_ids: bool = False  # True = production mode (use Item IDs), False = simple mode (description only)
+    sage_use_item_ids: bool = True  # True = use Item IDs (items must exist), False = simple mode (description only)
     
     # === Carrier API Credentials ===
     # FedEx
