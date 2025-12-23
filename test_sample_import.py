@@ -135,7 +135,7 @@ def generate_sample_orders(num_orders: int = 10) -> pd.DataFrame:
         selected_products = random.sample(PRODUCTS, num_items)
         
         for product in selected_products:
-            qty = random.randint(1, 100)
+            qty = random.randint(1, 10)  # Smaller quantities for testing
             unit_price = product["price"]
             amount = round(qty * unit_price, 2)
             
