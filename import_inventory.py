@@ -78,12 +78,14 @@ def create_inventory_xml(items_df: pd.DataFrame, batch_num: int = 0) -> str:
         ET.SubElement(sales_price_info, "Sales_Price_Rounding").text = "0"
         ET.SubElement(sales_price_info, "Sales_Price_Rounding_Cent").text = "0.00000"
         
-        # Last Unit Cost
-        try:
-            unit_cost = float(row.get('Last Unit Cost', 0) or 0)
-        except:
-            unit_cost = 0.0
-        ET.SubElement(item, "Last_Unit_Cost").text = f"{unit_cost:.5f}"
+        # Last Unit Cost - SKIP this field as it may be read-only in Sage
+        # Sage calculates this based on purchase history
+        # try:
+        #     unit_cost = float(row.get('Last Unit Cost', 0) or 0)
+        #     if unit_cost > 0:
+        #         ET.SubElement(item, "Last_Unit_Cost").text = f"{unit_cost:.5f}"
+        # except:
+        #     pass
         
         # Costing Method (1 = FIFO, 2 = LIFO, 3 = Average)
         ET.SubElement(item, "Costing_Method").text = "1"
