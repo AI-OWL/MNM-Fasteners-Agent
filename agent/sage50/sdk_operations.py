@@ -148,7 +148,7 @@ class SageSDK:
         
         # Get credentials
         username = self.config.sage50_username or "Peachtree Software"
-        password = self.config.sage50_password or ""
+        password = self.config.sage50_password or "9E5643PCU118X6C"
         
         logger.info(f"Connecting with pythonnet (user={username})...")
         
