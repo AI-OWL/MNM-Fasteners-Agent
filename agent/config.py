@@ -121,7 +121,7 @@ class AgentConfig:
             sage50_odbc_dsn=os.getenv("SAGE_ODBC_DSN", ""),
             sage_ar_account=os.getenv("SAGE_AR_ACCOUNT", "1100"),
             sage_sales_account=os.getenv("SAGE_SALES_ACCOUNT", "4100"),
-            sage_use_item_ids=os.getenv("SAGE_USE_ITEM_IDS", "false").lower() in ("true", "1", "yes"),
+            sage_use_item_ids=os.getenv("SAGE_USE_ITEM_IDS", "true").lower() in ("true", "1", "yes"),
             
             # FedEx
             fedex_client_id=os.getenv("FEDEX_CLIENT_ID", ""),
