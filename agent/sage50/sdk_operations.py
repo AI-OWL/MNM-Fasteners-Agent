@@ -710,27 +710,22 @@ class SageSDK:
             platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
             platform = str(order.source_platform).replace("Platform.", "")
             
-            # Use customer ID from order if set (e.g., from Excel import)
-            # Otherwise generate one from customer NAME
-            customer_id = getattr(order, '_sage_customer_id', None)
+            # Customer ID is ALWAYS just the platform name: Amazon, eBay, or Shopify
+            # The actual buyer name goes in Ship To Name on the invoice
+            # All orders for a platform accumulate under that single customer
+            if order.amazon_order_id:
+                customer_id = "Amazon"
+            elif order.ebay_order_id:
+                customer_id = "eBay"
+            elif order.shopify_order_id:
+                customer_id = "Shopify"
+            else:
+                customer_id = platform  # Fallback to platform name
             
-            # Log what we got from Excel
-            logger.debug(f"Customer ID from Excel: '{customer_id}'")
-            
-            if not customer_id or customer_id.strip() == '':
-                # Generate customer ID from customer name, NOT platform
-                name = order.customer_name or "CUSTOMER"
-                # Remove special chars and spaces, take first 14 chars
-                customer_id = ''.join(c for c in name if c.isalnum())[:14].upper()
-                if not customer_id:
-                    customer_id = "CUST"
-                logger.info(f"Generated customer ID '{customer_id}' from name '{name}'")
+            logger.debug(f"Using customer ID: {customer_id} (Ship To: {order.customer_name})")
             
             # Generate invoice number from platform order ID
             invoice_number = platform_id[:20] if platform_id else f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            
-            # Ensure customer exists (auto-create if needed)
-            customer_id = self._ensure_customer_exists(customer_id, order)
             
             # In production mode, ensure items exist (they should already be in Sage)
             use_item_ids = getattr(self.config, 'sage_use_item_ids', False)
@@ -766,155 +761,12 @@ class SageSDK:
             logger.error(f"Failed to create order (Peachtree): {e}")
             raise SageSDKError(f"Failed to create order: {e}")
     
-    def _ensure_customer_exists(self, customer_id: str, order: Order) -> str:
-        """
-        Check if customer exists in Sage, create if not.
-        
-        Returns the customer ID (may be modified if auto-created).
-        """
-        if not customer_id:
-            # Generate customer ID from name
-            name = order.customer_name or "CUSTOMER"
-            customer_id = name[:14].upper().replace(" ", "")
-        
-        # Try to check if customer exists by attempting an export filter
-        # If that fails, we'll try to create the customer
-        try:
-            if self._customer_exists(customer_id):
-                logger.debug(f"Customer {customer_id} exists")
-                return customer_id
-        except Exception as e:
-            logger.debug(f"Could not check if customer exists: {e}")
-        
-        # Customer doesn't exist - create them
-        logger.info(f"Customer {customer_id} not found, creating...")
-        try:
-            self._create_customer(customer_id, order)
-            logger.info(f"Created customer: {customer_id}")
-        except Exception as e:
-            logger.warning(f"Could not create customer {customer_id}: {e}")
-            # Continue anyway - the import might still work if customer exists
-        
-        return customer_id
-    
-    def _customer_exists(self, customer_id: str) -> bool:
-        """Check if a customer ID exists in Sage."""
-        if not HAS_PYTHONNET or not self._company:
-            return False  # Assume exists if we can't check
-        
-        try:
-            from Interop.PeachwServer import Export, PeachwIEObj, PeachwIEFileType, PeachwIEObjCustomerListField, PeachwIEFilterOperation
-            
-            # Create exporter for customer list with filter
-            exporter = Export(self._company.CreateExporter(PeachwIEObj.peachwIEObjCustomerList))
-            exporter.ClearExportFieldList()
-            exporter.AddToExportFieldList(int(PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerId))
-            
-            # Filter by customer ID
-            exporter.SetFilterValue(
-                int(PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerId),
-                PeachwIEFilterOperation.peachwIEFilterOperationEqual,
-                customer_id,
-                customer_id
-            )
-            
-            # Export to temp file
-            temp_path = Path(tempfile.gettempdir()) / f"cust_check_{customer_id}.xml"
-            exporter.SetFilename(str(temp_path))
-            exporter.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
-            exporter.Export()
-            
-            # Check if any results
-            if temp_path.exists():
-                content = temp_path.read_text()
-                temp_path.unlink()
-                # If the XML contains the customer ID, they exist
-                return customer_id in content
-            
-            return False
-            
-        except Exception as e:
-            logger.debug(f"Customer check failed: {e}")
-            return False  # Assume doesn't exist
-    
-    def _create_customer(self, customer_id: str, order: Order):
-        """Create a new customer in Sage via XML import."""
-        if not HAS_PYTHONNET or not self._company:
-            raise SageSDKError("pythonnet not available for customer creation")
-        
-        from Interop.PeachwServer import Import, PeachwIEObj, PeachwIEFileType, PeachwIEObjCustomerListField
-        
-        # Create customer XML
-        root = ET.Element("PAW_Customers")
-        root.set("xmlns:paw", "urn:schemas-peachtree-com/paw8.02-datatypes")
-        root.set("xmlns:xsi", "http://www.w3.org/2000/10/XMLSchema-instance")
-        
-        customer = ET.SubElement(root, "PAW_Customer")
-        
-        # Customer ID
-        id_elem = ET.SubElement(customer, "ID")
-        id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-        id_elem.text = customer_id
-        
-        # Customer Name
-        ET.SubElement(customer, "Name").text = (order.customer_name or customer_id)[:40]
-        
-        # Bill To Address
-        bill_to = ET.SubElement(customer, "BillToAddress")
-        ET.SubElement(bill_to, "Line1").text = (order.ship_address_1 or "")[:40]
-        ET.SubElement(bill_to, "Line2").text = (order.ship_address_2 or "")[:40]
-        ET.SubElement(bill_to, "City").text = (order.ship_city or "")[:25]
-        ET.SubElement(bill_to, "State").text = (order.ship_state or "")[:2]
-        ET.SubElement(bill_to, "Zip").text = (order.ship_postcode or "")[:12]
-        
-        # Ship To Address (same as bill to)
-        ship_to = ET.SubElement(customer, "ShipToAddress")
-        ET.SubElement(ship_to, "Line1").text = (order.ship_address_1 or "")[:40]
-        ET.SubElement(ship_to, "Line2").text = (order.ship_address_2 or "")[:40]
-        ET.SubElement(ship_to, "City").text = (order.ship_city or "")[:25]
-        ET.SubElement(ship_to, "State").text = (order.ship_state or "")[:2]
-        ET.SubElement(ship_to, "Zip").text = (order.ship_postcode or "")[:12]
-        
-        # Contact info
-        if order.customer_email:
-            ET.SubElement(customer, "E_Mail").text = order.customer_email[:50]
-        if order.customer_phone:
-            ET.SubElement(customer, "Telephone1").text = order.customer_phone[:20]
-        
-        # Write to temp file
-        temp_path = Path(tempfile.gettempdir()) / f"customer_{customer_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.xml"
-        tree = ET.ElementTree(root)
-        tree.write(str(temp_path), encoding="utf-8", xml_declaration=True)
-        
-        try:
-            # Import customer
-            importer = Import(self._company.CreateImporter(PeachwIEObj.peachwIEObjCustomerList))
-            importer.ClearImportFieldList()
-            
-            # Add fields
-            fields = [
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerId,
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerName,
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToAddressLine1,
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToAddressLine2,
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToCity,
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToState,
-                PeachwIEObjCustomerListField.peachwIEObjCustomerListField_CustomerBillToZip,
-            ]
-            
-            for field in fields:
-                importer.AddToImportFieldList(int(field))
-            
-            importer.SetFilename(str(temp_path))
-            importer.SetFileType(PeachwIEFileType.peachwIEFileTypeXML)
-            importer.Import()
-            
-        finally:
-            # Clean up
-            try:
-                temp_path.unlink()
-            except:
-                pass
+    # NOTE: No customer creation/modification logic. Customers must be pre-created:
+    # - Amazon (ID: Amazon, Name: Amazon)
+    # - eBay (ID: eBay, Name: eBay)  
+    # - Shopify (ID: Shopify, Name: Shopify)
+    # All orders just add up under these platform customers. The actual buyer name
+    # goes in the "Ship To Name" field on each invoice, not as a customer record.
     
     def _ensure_item_exists(self, item_id: str, description: str = "") -> str:
         """
@@ -1276,11 +1128,18 @@ class SageSDK:
             sales_order = self._company.CreateObject("SalesOrder")
             sales_order.AddNew()
             
-            # Get or create customer account
-            account_ref = self._get_or_create_customer_sdo(order)
-            
             platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
             platform = str(order.source_platform).replace("Platform.", "")
+            
+            # Customer account is just the platform name (Amazon, eBay, Shopify)
+            if order.amazon_order_id:
+                account_ref = "Amazon"
+            elif order.ebay_order_id:
+                account_ref = "eBay"
+            elif order.shopify_order_id:
+                account_ref = "Shopify"
+            else:
+                account_ref = platform
             
             # Set header fields
             sales_order.Fields("ACCOUNT_REF").Value = account_ref
@@ -1336,101 +1195,6 @@ class SageSDK:
         except Exception as e:
             logger.error(f"Failed to create order (SDO): {e}")
             raise SageSDKError(f"Failed to create order: {e}")
-    
-    def _get_or_create_customer_peachtree(self, order: Order) -> str:
-        """Get or create customer using Peachtree API (US)."""
-        # Generate customer ID from name
-        name = order.customer_name or "CUSTOMER"
-        customer_id = name[:14].upper().replace(" ", "")
-        
-        # Add platform prefix
-        if order.amazon_order_id:
-            customer_id = "AMZ-" + customer_id[:10]
-        elif order.ebay_order_id:
-            customer_id = "EBY-" + customer_id[:10]
-        elif order.shopify_order_id:
-            customer_id = "SHP-" + customer_id[:10]
-        
-        # Check if customer exists
-        try:
-            customers = self._company.Customers
-            existing = customers.Find(customer_id)
-            if existing:
-                return customer_id
-        except Exception:
-            pass
-        
-        # Create new customer
-        try:
-            customers = self._company.Customers
-            new_customer = customers.Add()
-            
-            new_customer.ID = customer_id
-            new_customer.Name = order.customer_name[:40] if order.customer_name else ""
-            new_customer.BillToAddress1 = (order.ship_address_1 or "")[:40]
-            new_customer.BillToAddress2 = (order.ship_address_2 or "")[:40]
-            new_customer.BillToCity = (order.ship_city or "")[:25]
-            new_customer.BillToState = (order.ship_state or "")[:2]
-            new_customer.BillToZip = (order.ship_postcode or "")[:12]
-            
-            if order.customer_email:
-                new_customer.Email = order.customer_email[:50]
-            if order.customer_phone:
-                new_customer.Telephone1 = order.customer_phone[:20]
-            
-            new_customer.Save()
-            logger.info(f"Created customer: {customer_id}")
-            
-        except Exception as e:
-            logger.warning(f"Could not create customer: {e}")
-        
-        return customer_id
-    
-    def _get_or_create_customer_sdo(self, order: Order) -> str:
-        """Get or create customer using SDO API (UK)."""
-        # Generate account ref from customer name
-        name = order.customer_name or "CUSTOMER"
-        account_ref = name[:8].upper().replace(" ", "")
-        
-        # Add platform prefix
-        if order.amazon_order_id:
-            account_ref = "AMZ" + account_ref[:5]
-        elif order.ebay_order_id:
-            account_ref = "EBY" + account_ref[:5]
-        elif order.shopify_order_id:
-            account_ref = "SHP" + account_ref[:5]
-        
-        # Check if exists
-        try:
-            customer = self._company.CreateObject("SalesRecord")
-            if customer.Find("ACCOUNT_REF", account_ref):
-                return account_ref
-        except Exception:
-            pass
-        
-        # Create new customer
-        try:
-            customer = self._company.CreateObject("SalesRecord")
-            customer.AddNew()
-            
-            customer.Fields("ACCOUNT_REF").Value = account_ref
-            customer.Fields("NAME").Value = order.customer_name[:60]
-            customer.Fields("ADDRESS_1").Value = (order.ship_address_1 or "")[:60]
-            customer.Fields("ADDRESS_2").Value = (order.ship_address_2 or "")[:60]
-            customer.Fields("ADDRESS_3").Value = (order.ship_city or "")[:60]
-            customer.Fields("ADDRESS_5").Value = (order.ship_postcode or "")[:10]
-            
-            if order.customer_email:
-                customer.Fields("E_MAIL").Value = order.customer_email[:60]
-            
-            customer.Update()
-            
-            logger.info(f"Created customer account: {account_ref}")
-            
-        except Exception as e:
-            logger.warning(f"Could not create customer: {e}")
-        
-        return account_ref
     
     def update_order_tracking(
         self,
@@ -1728,13 +1492,19 @@ class SageSDK:
         if not platform:
             platform = 'Amazon'
         
-        # Customer ID = just the platform name (AMAZON, EBAY, SHOPIFY)
-        customer_id = platform.upper()[:14]
+        # Determine platform from the Customer ID column (Amazon, eBay, Shopify)
+        platform_lower = platform.lower() if platform else 'amazon'
+        if 'ebay' in platform_lower:
+            source_platform = Platform.EBAY
+        elif 'shopify' in platform_lower:
+            source_platform = Platform.SHOPIFY
+        else:
+            source_platform = Platform.AMAZON
         
         # Get customer name (this goes in Ship To Name field on the invoice)
         customer_name = get_val(first_row, name_col)[:40] if name_col else ''
         
-        logger.info(f"Order {order_id}: Customer ID='{customer_id}', Ship To Name='{customer_name}'")
+        logger.info(f"Order {order_id}: Platform={source_platform}, Ship To Name='{customer_name}'")
         
         # Get phone number
         customer_phone = get_val(first_row, phone_col)[:20] if phone_col else ''
@@ -1750,16 +1520,18 @@ class SageSDK:
             ship_city=get_val(first_row, city_col)[:25] if city_col else '',
             ship_state=get_val(first_row, state_col)[:2] if state_col else '',
             ship_postcode=get_val(first_row, zip_col)[:12] if zip_col else '',
-            source_platform=Platform.AMAZON,
+            source_platform=source_platform,
         )
         
-        # Set platform order ID
+        # Set platform order ID based on which platform this order came from
         ecom_order = str(order_id) if order_id else None
         if ecom_order:
-            order.amazon_order_id = ecom_order
-        
-        # Store customer ID for import
-        order._sage_customer_id = customer_id
+            if source_platform == Platform.EBAY:
+                order.ebay_order_id = ecom_order
+            elif source_platform == Platform.SHOPIFY:
+                order.shopify_order_id = ecom_order
+            else:
+                order.amazon_order_id = ecom_order
         
         # Parse line items
         logger.debug(f"Parsing {len(rows)} rows for line items")
@@ -1830,7 +1602,7 @@ class SageSDK:
                 unit_price=order.total,
             ))
         
-        logger.info(f"Order {order_id}: {len(order.lines)} lines, customer={order._sage_customer_id}, total={order.total}")
+        logger.info(f"Order {order_id}: {len(order.lines)} lines, platform={order.source_platform}, total={order.total}")
         
         return order
 

@@ -258,6 +258,13 @@ def main():
     print(f"Total rows: {len(df)}")
     print(f"Unique orders: {df['E-Commerce Order#'].nunique()}")
     print(f"Platforms: {df['Customer ID'].unique().tolist()}")
+    
+    # Show platform distribution
+    platform_counts = df.groupby('Customer ID')['E-Commerce Order#'].nunique()
+    print("\nOrders by platform (customers in Sage):")
+    for platform, count in platform_counts.items():
+        print(f"  - {platform}: {count} orders")
+    
     print("\nFirst few rows:")
     print(df[['Customer ID', 'E-Commerce Order#', 'Ship to Name', 'Item ID', 'Qty', 'Unit Price']].head(10).to_string())
     
