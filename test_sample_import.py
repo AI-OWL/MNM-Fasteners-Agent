@@ -41,24 +41,20 @@ STATES = [
     "NJ", "VA", "WA", "AZ", "MA", "TN", "IN", "MO", "MD", "WI"
 ]
 
-# Sample products (fasteners theme)
+# Real products from imported inventory
 PRODUCTS = [
-    {"sku": "BOLT-HEX-14", "desc": "Hex Bolt 1/4-20 x 1\"", "price": 0.25},
-    {"sku": "BOLT-HEX-38", "desc": "Hex Bolt 3/8-16 x 1.5\"", "price": 0.45},
-    {"sku": "BOLT-HEX-12", "desc": "Hex Bolt 1/2-13 x 2\"", "price": 0.75},
-    {"sku": "NUT-HEX-14", "desc": "Hex Nut 1/4-20", "price": 0.08},
-    {"sku": "NUT-HEX-38", "desc": "Hex Nut 3/8-16", "price": 0.12},
-    {"sku": "NUT-HEX-12", "desc": "Hex Nut 1/2-13", "price": 0.18},
-    {"sku": "WASHER-FL-14", "desc": "Flat Washer 1/4\"", "price": 0.05},
-    {"sku": "WASHER-FL-38", "desc": "Flat Washer 3/8\"", "price": 0.07},
-    {"sku": "WASHER-LK-14", "desc": "Lock Washer 1/4\"", "price": 0.06},
-    {"sku": "SCREW-WD-8", "desc": "Wood Screw #8 x 1\"", "price": 0.10},
-    {"sku": "SCREW-WD-10", "desc": "Wood Screw #10 x 1.5\"", "price": 0.12},
-    {"sku": "SCREW-SH-14", "desc": "Sheet Metal Screw #14 x 1\"", "price": 0.15},
-    {"sku": "ANCHOR-EXP-14", "desc": "Expansion Anchor 1/4\"", "price": 0.35},
-    {"sku": "ANCHOR-EXP-38", "desc": "Expansion Anchor 3/8\"", "price": 0.55},
-    {"sku": "RIVET-POP-18", "desc": "Pop Rivet 1/8\" Aluminum", "price": 0.08},
-    {"sku": "RIVET-POP-316", "desc": "Pop Rivet 3/16\" Steel", "price": 0.12},
+    {"item_id": "5CB51618212", "desc": "5/16-18X2-1/2 Crrg Blt Gr5 ZN", "price": 0.30},
+    {"item_id": "5CB516183", "desc": "5/16-18X3 CRRG BLT GR 5", "price": 0.35},
+    {"item_id": "5CB5161834", "desc": "5/16-18X3/4 Crrg Blt Gr5 ZN", "price": 0.25},
+    {"item_id": "5C-B-FAST", "desc": "5C-BOX B", "price": 15.00},
+    {"item_id": "5CB-KIT24-FAST", "desc": "Grade 5 Carriage Bolt Kit", "price": 45.00},
+    {"item_id": "5C-BOX A", "desc": "5C Box A", "price": 12.00},
+    {"item_id": "5C-C-FAST", "desc": "5C-BOX C", "price": 18.00},
+    {"item_id": "5C-D-FAST", "desc": "5C-BOX D", "price": 20.00},
+    {"item_id": "5C-KIT18", "desc": "Grade 5 Assortment Kit", "price": 35.00},
+    {"item_id": "5C-KIT24", "desc": "Gr5 Coarse Kit w/ 24 Drawer", "price": 125.00},
+    {"item_id": "5C-KIT24-FAST", "desc": "Gr5 Coarse Kit Fasteners Only", "price": 85.00},
+    {"item_id": "5HN1213", "desc": "1/2-13 Hex Nut Gr5 ZN", "price": 0.18},
 ]
 
 PLATFORMS = ["Amazon", "eBay", "Shopify"]
@@ -154,7 +150,7 @@ def generate_sample_orders(num_orders: int = 10) -> pd.DataFrame:
                 "State": state,
                 "Zipcode": zipcode,
                 "Customer Phone #": phone,
-                "Item ID": product["sku"],
+                "Item ID": product["item_id"],
                 "Description": product["desc"],
                 "Qty": qty,
                 "Unit Price": unit_price,
