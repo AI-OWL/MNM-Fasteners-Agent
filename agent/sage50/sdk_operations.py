@@ -896,9 +896,6 @@ class SageSDK:
         # Customer Name (the platform name)
         ET.SubElement(invoice, "Customer_Name").text = customer_id
         
-        # Ship To Name (the actual customer's name - this shows on the invoice)
-        ET.SubElement(invoice, "Ship_To_Name").text = (order.customer_name or "")[:40]
-        
         # Date
         date_elem = ET.SubElement(invoice, "Date")
         date_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:date")
@@ -907,7 +904,10 @@ class SageSDK:
         # Invoice Number
         ET.SubElement(invoice, "Invoice_Number").text = invoice_number
         
-        # Ship To Address
+        # Ship To - Name first, then address (matching Sage's field order)
+        ship_to_name = (order.customer_name or order.ship_name or "")[:40]
+        logger.info(f"Setting Ship To Name: '{ship_to_name}'")
+        ET.SubElement(invoice, "Name").text = ship_to_name  # Simple "Name" element
         ET.SubElement(invoice, "Line1").text = (order.ship_address_1 or "")[:40]
         ET.SubElement(invoice, "Line2").text = (order.ship_address_2 or "")[:40]
         ET.SubElement(invoice, "City").text = (order.ship_city or "")[:25]
