@@ -28,8 +28,9 @@ def check_sage_setup():
         # Connect to already-open Sage (no login required)
         print("Connecting to already-open Sage 50 session...")
         login = Login()
-        # Empty credentials = connect to existing session
-        app = Application(login.GetApplication("", ""))
+        # Use "Peachtree Software" as username - connects to existing session
+        obj = login.GetApplication("Peachtree Software", "")
+        app = Application(obj)
         
         if app.get_CompanyIsOpen():
             company_name = app.get_CompanyName()

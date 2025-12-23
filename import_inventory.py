@@ -217,15 +217,17 @@ def main():
         
         print("\nConnecting to already-open Sage 50 session...")
         login = Login()
-        # Empty credentials = connect to existing session
-        app = Application(login.GetApplication("", ""))
+        
+        # Use "Peachtree Software" as username - this connects to existing session
+        obj = login.GetApplication("Peachtree Software", "")
+        app = Application(obj)
         
         if not app.get_CompanyIsOpen():
             print("ERROR: No company is open in Sage.")
             print("Please open Sage 50 and open the test company first.")
             return
         
-        company_name = app.get_CompanyName()
+        company_name = app.get_CurrentCompanyName()
         print(f"Connected to: {company_name}")
         print("(Using existing session - Sage will stay open)")
         
