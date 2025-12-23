@@ -9,6 +9,9 @@ import tempfile
 from datetime import datetime
 from loguru import logger
 
+from agent.config import init_config
+from agent.sage50.sdk_operations import SageSDK, SageSDKError
+
 # Batch size - Sage SDK may have limits on import size
 BATCH_SIZE = 100
 
@@ -201,38 +204,20 @@ def main():
         print(f"\nFirst 2000 chars of XML:\n{content[:2000]}")
         return
     
-    # Connect to already-open Sage (no login required)
+    # Connect using the already-working SageSDK
     try:
-        import clr
-        from pathlib import Path as P
+        print("\nConnecting to Sage 50...")
+        config = init_config()
+        sdk = SageSDK(config)
+        sdk.connect()
         
-        sage_path = r"C:\Program Files (x86)\Sage\Peachtree\Interop.PeachwServer.dll"
-        if P(sage_path).exists():
-            clr.AddReference(sage_path)
-        else:
-            print(f"ERROR: Sage SDK not found at {sage_path}")
-            return
+        app = sdk._company  # Get the Application object for direct SDK calls
         
-        from Interop.PeachwServer import Login, Application
-        
-        print("\nConnecting to already-open Sage 50 session...")
-        login = Login()
-        
-        # Use "Peachtree Software" as username - this connects to existing session
-        obj = login.GetApplication("Peachtree Software", "")
-        app = Application(obj)
-        
-        if not app.get_CompanyIsOpen():
-            print("ERROR: No company is open in Sage.")
-            print("Please open Sage 50 and open the test company first.")
-            return
-        
-        company_name = app.get_CurrentCompanyName()
-        print(f"Connected to: {company_name}")
+        print(f"Connected to Sage 50!")
         print("(Using existing session - Sage will stay open)")
         
-    except ImportError as e:
-        print(f"ERROR: pythonnet not installed. Run: pip install pythonnet")
+    except SageSDKError as e:
+        print(f"ERROR: {e}")
         return
     except Exception as e:
         print(f"ERROR connecting to Sage: {e}")
@@ -249,33 +234,37 @@ def main():
     
     num_batches = (total_items + args.batch_size - 1) // args.batch_size
     
-    for batch_num in range(num_batches):
-        start_idx = batch_num * args.batch_size
-        end_idx = min(start_idx + args.batch_size, total_items)
-        batch_df = df.iloc[start_idx:end_idx]
-        
-        print(f"\nBatch {batch_num + 1}/{num_batches}: Items {start_idx + 1} to {end_idx}...")
-        
-        # Create XML for this batch
-        xml_path = create_inventory_xml(batch_df, batch_num)
-        
-        # Import
-        result = import_inventory_batch(xml_path, app)
-        
-        if result["success"]:
-            total_success += len(batch_df)
-            print(f"  [OK] Imported {len(batch_df)} items")
-        else:
-            total_failed += len(batch_df)
-            error_msg = result.get("error", "Unknown error")
-            errors.append(f"Batch {batch_num + 1}: {error_msg}")
-            print(f"  [FAILED] {error_msg}")
-        
-        # Clean up temp file
-        try:
-            Path(xml_path).unlink()
-        except:
-            pass
+    try:
+        for batch_num in range(num_batches):
+            start_idx = batch_num * args.batch_size
+            end_idx = min(start_idx + args.batch_size, total_items)
+            batch_df = df.iloc[start_idx:end_idx]
+            
+            print(f"\nBatch {batch_num + 1}/{num_batches}: Items {start_idx + 1} to {end_idx}...")
+            
+            # Create XML for this batch
+            xml_path = create_inventory_xml(batch_df, batch_num)
+            
+            # Import
+            result = import_inventory_batch(xml_path, app)
+            
+            if result["success"]:
+                total_success += len(batch_df)
+                print(f"  [OK] Imported {len(batch_df)} items")
+            else:
+                total_failed += len(batch_df)
+                error_msg = result.get("error", "Unknown error")
+                errors.append(f"Batch {batch_num + 1}: {error_msg}")
+                print(f"  [FAILED] {error_msg}")
+            
+            # Clean up temp file
+            try:
+                Path(xml_path).unlink()
+            except:
+                pass
+    finally:
+        # Disconnect (won't close Sage if it was already open)
+        sdk.disconnect()
     
     # Summary
     print("\n" + "="*60)
