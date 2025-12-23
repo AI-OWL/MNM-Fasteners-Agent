@@ -727,10 +727,11 @@ class SageSDK:
             # Generate invoice number from platform order ID
             invoice_number = platform_id[:20] if platform_id else f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S')}"
             
-            # In production mode, ensure items exist (they should already be in Sage)
-            use_item_ids = getattr(self.config, 'sage_use_item_ids', False)
+            # Use Item IDs in invoices (items must exist in Sage inventory)
+            # Default to True since inventory is imported
+            use_item_ids = getattr(self.config, 'sage_use_item_ids', True)
             if use_item_ids:
-                logger.debug("Production mode: Using Item IDs in invoice")
+                logger.debug("Using Item IDs in invoice (items must exist in Sage)")
             else:
                 logger.debug("Simple mode: Using description + GL account (no Item IDs)")
             
