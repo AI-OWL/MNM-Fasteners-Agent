@@ -18,87 +18,110 @@ BATCH_SIZE = 100
 
 def create_inventory_xml(items_df: pd.DataFrame, batch_num: int = 0) -> str:
     """
-    Create XML file for inventory import.
+    Create XML file for inventory import matching Sage's exact format.
     
-    Sage 50 Inventory Item fields:
-    - Item_ID (required)
-    - Description
-    - Item_Class (Stock item, Non-stock item, Service, etc.)
-    - Sales_Price (Package Price)
-    - Last_Unit_Cost
-    - GL_Sales_Account (required - defaults to 4100)
-    - GL_Inventory_Account (for stock items - defaults to 1200)
-    - GL_Cost_Of_Sales_Account (for stock items - defaults to 5000)
+    Based on actual Sage 50 export format:
+    - Root: PAW_Items
+    - Item: PAW_Item with xsi:type="paw:item"
+    - ID with xsi:type="paw:id"
+    - Class as number (1=Stock, 4=Non-stock, etc.)
     """
     
-    # Create XML structure
-    root = ET.Element("PAW_Inventory_Items")
+    # Create XML structure matching Sage's format
+    root = ET.Element("PAW_Items")
     root.set("xmlns:paw", "urn:schemas-peachtree-com/paw8.02-datatypes")
     root.set("xmlns:xsi", "http://www.w3.org/2000/10/XMLSchema-instance")
+    root.set("xmlns:xsd", "http://www.w3.org/2000/10/XMLSchema-datatypes")
     
     for idx, row in items_df.iterrows():
-        item = ET.SubElement(root, "PAW_Inventory_Item")
+        item = ET.SubElement(root, "PAW_Item")
+        item.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:item")
         
         # Item ID (required) - max 20 chars
         item_id = str(row.get('Item ID', '')).strip()[:20]
         if not item_id:
             continue
-            
-        id_elem = ET.SubElement(item, "Item_ID")
-        id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        
+        id_elem = ET.SubElement(item, "ID")
+        id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:id")
         id_elem.text = item_id
         
         # Description - max 160 chars
         description = str(row.get('Description', item_id)).strip()[:160]
         ET.SubElement(item, "Description").text = description
         
-        # Item Class
-        item_class = str(row.get('Item Class', 'Stock item')).strip()
-        # Map to Sage item types
-        if 'non-stock' in item_class.lower() or 'non stock' in item_class.lower():
-            ET.SubElement(item, "Item_Class").text = "Non-stock item"
-        elif 'service' in item_class.lower():
-            ET.SubElement(item, "Item_Class").text = "Service"
-        elif 'assembly' in item_class.lower():
-            ET.SubElement(item, "Item_Class").text = "Assembly"
+        # Item Class as number (1=Stock item, 4=Non-stock, 3=Service, 2=Assembly)
+        item_class = str(row.get('Item Class', 'Stock item')).strip().lower()
+        if 'non-stock' in item_class or 'non stock' in item_class:
+            ET.SubElement(item, "Class").text = "4"
+        elif 'service' in item_class:
+            ET.SubElement(item, "Class").text = "3"
+        elif 'assembly' in item_class:
+            ET.SubElement(item, "Class").text = "2"
         else:
-            ET.SubElement(item, "Item_Class").text = "Stock item"
+            ET.SubElement(item, "Class").text = "1"  # Stock item
         
-        # Sales Price (Package Price)
+        # isInactive
+        ET.SubElement(item, "isInactive").text = "FALSE"
+        
+        # Sales Prices structure
+        sales_prices = ET.SubElement(item, "Sales_Prices")
+        sales_price_info = ET.SubElement(sales_prices, "Sales_Price_Info")
+        sales_price_info.set("Key", "1")
+        
         try:
             sales_price = float(row.get('Package Price', 0) or 0)
         except:
             sales_price = 0.0
-        ET.SubElement(item, "Sales_Price_1").text = f"{sales_price:.2f}"
+        ET.SubElement(sales_price_info, "Sales_Price").text = f"{sales_price:.5f}"
+        ET.SubElement(sales_price_info, "Sales_Price_Calc").text = "NC"
+        ET.SubElement(sales_price_info, "Sales_Price_Rounding").text = "0"
+        ET.SubElement(sales_price_info, "Sales_Price_Rounding_Cent").text = "0.00000"
         
         # Last Unit Cost
         try:
             unit_cost = float(row.get('Last Unit Cost', 0) or 0)
         except:
             unit_cost = 0.0
-        ET.SubElement(item, "Last_Unit_Cost").text = f"{unit_cost:.2f}"
+        ET.SubElement(item, "Last_Unit_Cost").text = f"{unit_cost:.5f}"
         
-        # GL Accounts - required for import
-        # Sales Account
+        # Costing Method (1 = FIFO, 2 = LIFO, 3 = Average)
+        ET.SubElement(item, "Costing_Method").text = "1"
+        
+        # GL Accounts matching test company format
         gl_sales = ET.SubElement(item, "GL_Sales_Account")
-        gl_sales.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-        gl_sales.text = "4100"  # Income account
+        gl_sales.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:id")
+        gl_sales.text = "4050"  # From the export
         
-        # Inventory Account (for stock items)
         gl_inv = ET.SubElement(item, "GL_Inventory_Account")
-        gl_inv.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-        gl_inv.text = "1200"  # Inventory asset account
+        gl_inv.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:id")
+        gl_inv.text = "1200"
         
-        # Cost of Sales Account (for stock items)
-        gl_cos = ET.SubElement(item, "GL_Cost_Of_Sales_Account")
-        gl_cos.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-        gl_cos.text = "5000"  # Cost of goods sold
+        gl_cogs = ET.SubElement(item, "GL_COGSSalary_Acct")
+        gl_cogs.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:id")
+        gl_cogs.text = "5000"
         
-        # Item Type (for Sage categorization)
-        ET.SubElement(item, "Item_Type").text = "Inventory"
+        # Stocking UM
+        ET.SubElement(item, "Stocking_UM").text = "each"
         
-        # Inactive flag
-        ET.SubElement(item, "Inactive").text = "False"
+        # Quantities
+        ET.SubElement(item, "Minimum_Stock").text = "0.00000"
+        ET.SubElement(item, "Reorder_Quantity").text = "0.00000"
+        ET.SubElement(item, "QuantityOnSO").text = "0.00000"
+        ET.SubElement(item, "QuantityOnPO").text = "0.00000"
+        ET.SubElement(item, "QuantityOnHand").text = "0.00000"
+        
+        # Tax settings
+        ET.SubElement(item, "IsTaxable").text = "TRUE"
+        ET.SubElement(item, "Tax_Type_Name").text = "Regular"
+        
+        # Class description
+        if 'non-stock' in item_class or 'non stock' in item_class:
+            ET.SubElement(item, "Class_Description").text = "Non-stock item"
+        elif 'service' in item_class:
+            ET.SubElement(item, "Class_Description").text = "Service"
+        else:
+            ET.SubElement(item, "Class_Description").text = "Stock item"
     
     # Write to temp file
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
