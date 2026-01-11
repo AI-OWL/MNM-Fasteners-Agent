@@ -1053,7 +1053,7 @@ class SageSDK:
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerName,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Date,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_InvoiceNumber,
+                    # InvoiceNumber removed - let Sage auto-generate
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToName,  # Ship To Name
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToAddressLine1,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToAddressLine2,
@@ -1098,7 +1098,7 @@ class SageSDK:
                     0,   # CustomerId
                     1,   # CustomerName
                     2,   # Date
-                    3,   # InvoiceNumber
+                    # 3 = InvoiceNumber - removed, let Sage auto-generate
                     4,   # ShipToAddressLine1
                     5,   # ShipToAddressLine2
                     6,   # ShipToCity
