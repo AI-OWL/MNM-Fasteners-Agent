@@ -912,6 +912,18 @@ class SageSDK:
         ET.SubElement(ship_to_addr, "Country").text = customer_phone[:25]
         logger.info(f"Setting Country (phone): '{customer_phone}'")
         
+        # Customer PO = Sales Order # / E-Commerce Order #
+        platform_order_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id or ""
+        ET.SubElement(invoice, "Customer_PO").text = platform_order_id[:20]
+        logger.info(f"Setting Customer PO: '{platform_order_id}'")
+        
+        # Ship Date = always current date (when report is generated)
+        ship_date = datetime.now()
+        ship_date_elem = ET.SubElement(invoice, "Ship_Date")
+        ship_date_elem.set(f"{{{XSI}}}type", "paw:date")
+        ship_date_elem.text = ship_date.strftime("%m/%d/%Y")
+        logger.info(f"Setting Ship Date: {ship_date.strftime('%m/%d/%Y')}")
+        
         # Due Date - always 30 days from invoice date (Date_Due like Sage uses)
         due_date = invoice_date + timedelta(days=30)
         due_date_elem = ET.SubElement(invoice, "Date_Due")
