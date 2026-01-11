@@ -962,6 +962,7 @@ class SageSDK:
             
             if use_item_ids:
                 # Production mode: Use actual Item ID (items must exist in Sage)
+                # GL Account comes from item's configuration - don't override
                 item_id = (line.sku or "ITEM")[:20]
                 logger.info(f"  Adding Item_ID: '{item_id}' to invoice")
                 
@@ -972,14 +973,14 @@ class SageSDK:
                 ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
             else:
                 # Simple mode: Include SKU in description (no Item_ID lookup)
+                # Need GL Account since no item is specified
                 desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
                 logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
-            
-            # GL Account for this line - Sage expects specific format
-            gl_acct = ET.SubElement(sales_line, "G_L_Account")
-            gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-            gl_acct.text = sales_account_id
+                
+                gl_acct = ET.SubElement(sales_line, "GL_Account")
+                gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+                gl_acct.text = sales_account_id
             
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
@@ -1004,7 +1005,7 @@ class SageSDK:
             ET.SubElement(ship_line, "Description").text = "Shipping & Handling"
             
             # GL Account for shipping
-            ship_gl = ET.SubElement(ship_line, "G_L_Account")
+            ship_gl = ET.SubElement(ship_line, "GL_Account")
             ship_gl.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
             ship_gl.text = sales_account_id
             
