@@ -832,7 +832,7 @@ class SageSDK:
         ET.SubElement(item, "SalesPrice1").text = "0.00"
         
         # GL Account for sales
-        sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
+        sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4000"
         gl_acct = ET.SubElement(item, "GLSalesAccount")
         gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
         gl_acct.text = sales_account_id
@@ -950,7 +950,7 @@ class SageSDK:
         sales_lines = ET.SubElement(invoice, "SalesLines")
         
         # GL Account for sales - configurable, default 4100
-        sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4100"
+        sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4000"
         logger.info(f"Using GL accounts - AR: {ar_account_id}, Sales: {sales_account_id}")
         logger.info(f"Order has {len(order.lines)} line items")
         
@@ -976,8 +976,8 @@ class SageSDK:
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
                 logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
             
-            # GL Account for this line
-            gl_acct = ET.SubElement(sales_line, "GLAccountId")
+            # GL Account for this line - Sage expects specific format
+            gl_acct = ET.SubElement(sales_line, "G_L_Account")
             gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
             gl_acct.text = sales_account_id
             
@@ -1004,7 +1004,7 @@ class SageSDK:
             ET.SubElement(ship_line, "Description").text = "Shipping & Handling"
             
             # GL Account for shipping
-            ship_gl = ET.SubElement(ship_line, "GLAccountId")
+            ship_gl = ET.SubElement(ship_line, "G_L_Account")
             ship_gl.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
             ship_gl.text = sales_account_id
             
