@@ -263,6 +263,7 @@ class Order(BaseModel):
     status: str = "pending"
     
     # Customer
+    customer_id: Optional[str] = None  # Customer ID in Sage (e.g., "Amazon", "ECOMMERCE TEST")
     customer_name: str
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None

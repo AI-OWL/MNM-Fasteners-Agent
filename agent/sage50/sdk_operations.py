@@ -708,19 +708,10 @@ class SageSDK:
         """
         try:
             platform_id = order.amazon_order_id or order.ebay_order_id or order.shopify_order_id
-            platform = str(order.source_platform).replace("Platform.", "")
             
-            # Customer ID is ALWAYS just the platform name: Amazon, eBay, or Shopify
-            # The actual buyer name goes in Ship To Name on the invoice
-            # All orders for a platform accumulate under that single customer
-            if order.amazon_order_id:
-                customer_id = "Amazon"
-            elif order.ebay_order_id:
-                customer_id = "eBay"
-            elif order.shopify_order_id:
-                customer_id = "Shopify"
-            else:
-                customer_id = platform  # Fallback to platform name
+            # Customer ID comes from the order (from Excel's Customer ID column)
+            # This could be "Amazon", "eBay", "Shopify", or a test ID like "ECOMMERCE TEST"
+            customer_id = order.customer_id or "Amazon"  # Fallback to Amazon if not set
             
             logger.debug(f"Using customer ID: {customer_id} (Ship To: {order.customer_name})")
             
@@ -1059,6 +1050,7 @@ class SageSDK:
                 importer.ClearImportFieldList()
                 
                 # Add fields to import (from C# sample)
+                # Note: GLAccountId removed - items have their own GL accounts configured
                 fields = [
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerName,
@@ -1077,7 +1069,6 @@ class SageSDK:
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Quantity,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ItemId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Description,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_GLAccountId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_UnitPrice,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_TaxType,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Amount,
@@ -1121,7 +1112,7 @@ class SageSDK:
                     13,  # Quantity
                     14,  # ItemId
                     15,  # Description
-                    16,  # GLAccountId
+                    # 16 = GLAccountId - removed, items have their own GL accounts
                     17,  # UnitPrice
                     18,  # TaxType
                     19,  # Amount
@@ -1534,6 +1525,7 @@ class SageSDK:
         # Create order
         order = Order(
             order_date=order_date,
+            customer_id=platform,  # Customer ID from Excel (e.g., "ECOMMERCE TEST", "Amazon")
             customer_name=customer_name,
             customer_phone=customer_phone,
             ship_name=customer_name,
