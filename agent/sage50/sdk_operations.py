@@ -869,19 +869,20 @@ class SageSDK:
             subtotal += order.shipping_cost
         total = subtotal  # Add tax if needed
         
-        # Create XML structure
+        # Create XML structure (matching Sage's exact format)
+        XSI = "http://www.w3.org/2000/10/XMLSchema-instance"
         root = ET.Element("PAW_Invoices")
         root.set("xmlns:paw", "urn:schemas-peachtree-com/paw8.02-datatypes")
-        root.set("xmlns:xsi", "http://www.w3.org/2000/10/XMLSchema-instance")
+        root.set("xmlns:xsi", XSI)
         root.set("xmlns:xsd", "http://www.w3.org/2000/10/XMLSchema-datatypes")
         
-        # Create invoice element
+        # Create invoice element (use paw:invoice like Sage exports)
         invoice = ET.SubElement(root, "PAW_Invoice")
-        invoice.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:receipt")
+        invoice.set(f"{{{XSI}}}type", "paw:invoice")
         
-        # Customer ID
+        # Customer ID (lowercase paw:id like Sage uses)
         cust_id_elem = ET.SubElement(invoice, "Customer_ID")
-        cust_id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        cust_id_elem.set(f"{{{XSI}}}type", "paw:id")
         cust_id_elem.text = customer_id
         
         # Customer Name (the platform name)
@@ -890,39 +891,38 @@ class SageSDK:
         # Date
         invoice_date = order.order_date if order.order_date else datetime.now()
         date_elem = ET.SubElement(invoice, "Date")
-        date_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:date")
+        date_elem.set(f"{{{XSI}}}type", "paw:date")
         date_elem.text = invoice_date.strftime("%m/%d/%Y")
-        
-        # Due Date - always 30 days from invoice date
-        due_date = invoice_date + timedelta(days=30)
-        due_date_elem = ET.SubElement(invoice, "Due_Date")
-        due_date_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:date")
-        due_date_elem.text = due_date.strftime("%m/%d/%Y")
-        logger.info(f"Invoice date: {invoice_date.strftime('%m/%d/%Y')}, Due date: {due_date.strftime('%m/%d/%Y')}")
-        
-        # Invoice Number - let Sage auto-generate (don't include)
         
         # Drop Ship - always checked
         ET.SubElement(invoice, "Drop_Ship").text = "TRUE"
         
-        # Ship To - Name first, then address (matching Sage's field order)
+        # ShipToAddress - wrapped in container element like Sage does
         ship_to_name = (order.customer_name or order.ship_name or "")[:40]
         logger.info(f"Setting Ship To Name: '{ship_to_name}'")
-        ET.SubElement(invoice, "Name").text = ship_to_name  # Simple "Name" element
-        ET.SubElement(invoice, "Line1").text = (order.ship_address_1 or "")[:40]
-        ET.SubElement(invoice, "Line2").text = (order.ship_address_2 or "")[:40]
-        ET.SubElement(invoice, "City").text = (order.ship_city or "")[:25]
-        ET.SubElement(invoice, "State").text = (order.ship_state or "")[:2]
-        ET.SubElement(invoice, "Zip").text = (order.ship_postcode or "")[:12]
+        ship_to_addr = ET.SubElement(invoice, "ShipToAddress")
+        ET.SubElement(ship_to_addr, "Name").text = ship_to_name
+        ET.SubElement(ship_to_addr, "Line1").text = (order.ship_address_1 or "")[:40]
+        ET.SubElement(ship_to_addr, "Line2").text = (order.ship_address_2 or "")[:40]
+        ET.SubElement(ship_to_addr, "City").text = (order.ship_city or "")[:25]
+        ET.SubElement(ship_to_addr, "State").text = (order.ship_state or "")[:2]
+        ET.SubElement(ship_to_addr, "Zip").text = (order.ship_postcode or "")[:12]
         # Country field = Customer Phone Number
         customer_phone = getattr(order, 'customer_phone', '') or ''
-        ET.SubElement(invoice, "Country").text = customer_phone[:25]
+        ET.SubElement(ship_to_addr, "Country").text = customer_phone[:25]
         logger.info(f"Setting Country (phone): '{customer_phone}'")
+        
+        # Due Date - always 30 days from invoice date (Date_Due like Sage uses)
+        due_date = invoice_date + timedelta(days=30)
+        due_date_elem = ET.SubElement(invoice, "Date_Due")
+        due_date_elem.set(f"{{{XSI}}}type", "paw:date")
+        due_date_elem.text = due_date.strftime("%m/%d/%Y")
+        logger.info(f"Invoice date: {invoice_date.strftime('%m/%d/%Y')}, Due date: {due_date.strftime('%m/%d/%Y')}")
         
         # AR Account - configurable, default 1100
         ar_account_id = getattr(self.config, 'sage_ar_account', None) or "1100"
         ar_acct = ET.SubElement(invoice, "Accounts_Receivable_Account")
-        ar_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+        ar_acct.set(f"{{{XSI}}}type", "paw:id")
         ar_acct.text = ar_account_id
         
         # AR Amount (total)
@@ -953,25 +953,24 @@ class SageSDK:
             
             if use_item_ids:
                 # Production mode: Use actual Item ID (items must exist in Sage)
-                # GL Account comes from item's configuration - don't override
                 item_id = (line.sku or "ITEM")[:20]
                 logger.info(f"  Adding Item_ID: '{item_id}' to invoice")
                 
                 item_id_elem = ET.SubElement(sales_line, "Item_ID")
-                item_id_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+                item_id_elem.set(f"{{{XSI}}}type", "paw:id")
                 item_id_elem.text = item_id
                 
                 ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
             else:
                 # Simple mode: Include SKU in description (no Item_ID lookup)
-                # Need GL Account since no item is specified
                 desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
                 logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
-                
-                gl_acct = ET.SubElement(sales_line, "GL_Account")
-                gl_acct.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-                gl_acct.text = sales_account_id
+            
+            # GL Account is always required
+            gl_acct = ET.SubElement(sales_line, "GL_Account")
+            gl_acct.set(f"{{{XSI}}}type", "paw:id")
+            gl_acct.text = sales_account_id
             
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
@@ -990,14 +989,14 @@ class SageSDK:
             ET.SubElement(ship_line, "Quantity").text = "1"
             
             ship_item = ET.SubElement(ship_line, "Item_ID")
-            ship_item.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+            ship_item.set(f"{{{XSI}}}type", "paw:id")
             ship_item.text = "SHIPPING"
             
             ET.SubElement(ship_line, "Description").text = "Shipping & Handling"
             
             # GL Account for shipping
             ship_gl = ET.SubElement(ship_line, "GL_Account")
-            ship_gl.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
+            ship_gl.set(f"{{{XSI}}}type", "paw:id")
             ship_gl.text = sales_account_id
             
             ET.SubElement(ship_line, "Unit_Price").text = f"{-order.shipping_cost:.2f}"
@@ -1050,7 +1049,6 @@ class SageSDK:
                 importer.ClearImportFieldList()
                 
                 # Add fields to import (from C# sample)
-                # Note: GLAccountId removed - items have their own GL accounts configured
                 fields = [
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerName,
@@ -1069,6 +1067,7 @@ class SageSDK:
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Quantity,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ItemId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Description,
+                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_GLAccountId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_UnitPrice,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_TaxType,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Amount,
@@ -1112,7 +1111,7 @@ class SageSDK:
                     13,  # Quantity
                     14,  # ItemId
                     15,  # Description
-                    # 16 = GLAccountId - removed, items have their own GL accounts
+                    16,  # GLAccountId
                     17,  # UnitPrice
                     18,  # TaxType
                     19,  # Amount
