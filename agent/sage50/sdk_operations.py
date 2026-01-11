@@ -18,7 +18,7 @@ What the SDK Can Do:
 """
 
 from typing import Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import tempfile
 import xml.etree.ElementTree as ET
@@ -897,12 +897,22 @@ class SageSDK:
         ET.SubElement(invoice, "Customer_Name").text = customer_id
         
         # Date
+        invoice_date = order.order_date if order.order_date else datetime.now()
         date_elem = ET.SubElement(invoice, "Date")
         date_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:date")
-        date_elem.text = order.order_date.strftime("%m/%d/%Y") if order.order_date else datetime.now().strftime("%m/%d/%Y")
+        date_elem.text = invoice_date.strftime("%m/%d/%Y")
         
-        # Invoice Number
-        ET.SubElement(invoice, "Invoice_Number").text = invoice_number
+        # Due Date - always 30 days from invoice date
+        due_date = invoice_date + timedelta(days=30)
+        due_date_elem = ET.SubElement(invoice, "Due_Date")
+        due_date_elem.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:date")
+        due_date_elem.text = due_date.strftime("%m/%d/%Y")
+        logger.info(f"Invoice date: {invoice_date.strftime('%m/%d/%Y')}, Due date: {due_date.strftime('%m/%d/%Y')}")
+        
+        # Invoice Number - let Sage auto-generate (don't include)
+        
+        # Drop Ship - always checked
+        ET.SubElement(invoice, "Drop_Ship").text = "TRUE"
         
         # Ship To - Name first, then address (matching Sage's field order)
         ship_to_name = (order.customer_name or order.ship_name or "")[:40]
@@ -913,6 +923,10 @@ class SageSDK:
         ET.SubElement(invoice, "City").text = (order.ship_city or "")[:25]
         ET.SubElement(invoice, "State").text = (order.ship_state or "")[:2]
         ET.SubElement(invoice, "Zip").text = (order.ship_postcode or "")[:12]
+        # Country field = Customer Phone Number
+        customer_phone = getattr(order, 'customer_phone', '') or ''
+        ET.SubElement(invoice, "Country").text = customer_phone[:25]
+        logger.info(f"Setting Country (phone): '{customer_phone}'")
         
         # AR Account - configurable, default 1100
         ar_account_id = getattr(self.config, 'sage_ar_account', None) or "1100"

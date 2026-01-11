@@ -106,15 +106,21 @@ def generate_sample_orders(num_orders: int = 10) -> pd.DataFrame:
     """
     rows = []
     
+    # For production testing, always use ECOMMERCE TEST as customer ID
+    TEST_CUSTOMER_ID = "ECOMMERCE TEST"
+    
     for i in range(num_orders):
-        # Pick random platform
+        # Pick random platform (still used for order ID generation)
         platform = random.choice(PLATFORMS)
         order_id = generate_order_id(platform)
         
-        # Random customer
+        # Random customer name (Ship to Name)
         first_name = random.choice(FIRST_NAMES)
         last_name = random.choice(LAST_NAMES)
         customer_name = f"{first_name} {last_name}"
+        
+        # Always use test customer ID for production testing
+        customer_id = TEST_CUSTOMER_ID
         
         # Random address
         street_num = random.randint(100, 9999)
@@ -140,7 +146,7 @@ def generate_sample_orders(num_orders: int = 10) -> pd.DataFrame:
             amount = round(qty * unit_price, 2)
             
             row = {
-                "Customer ID": platform,
+                "Customer ID": customer_id,
                 "E-Commerce Order#": order_id,
                 "Date of Order": order_date,
                 "Ship to Name": customer_name,
