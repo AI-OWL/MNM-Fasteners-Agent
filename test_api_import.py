@@ -223,7 +223,10 @@ def import_to_sage(filepath: Path) -> dict:
         
         logger.info("Connecting to Sage 50...")
         sdk.connect()
-        logger.info(f"Connected to: {sdk._company_name}")
+        
+        # Get company name safely
+        company_name = getattr(sdk, '_company_name', None) or "Unknown"
+        logger.info(f"Connected to: {company_name}")
         
         result = sdk.import_orders_from_excel(str(filepath))
         
@@ -233,6 +236,8 @@ def import_to_sage(filepath: Path) -> dict:
         
     except Exception as e:
         logger.error(f"Failed to import: {e}")
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 
