@@ -976,10 +976,7 @@ class SageSDK:
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
                 logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
             
-            # GL Amount
-            gl_amt = ET.SubElement(sales_line, "GL_Amount")
-            gl_amt.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-            gl_amt.text = "Account"
+            # Note: GL Account comes from the Item's configuration in Sage
             
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
@@ -1003,9 +1000,7 @@ class SageSDK:
             
             ET.SubElement(ship_line, "Description").text = "Shipping & Handling"
             
-            ship_gl = ET.SubElement(ship_line, "GL_Amount")
-            ship_gl.set("{http://www.w3.org/2000/10/XMLSchema-instance}type", "paw:ID")
-            ship_gl.text = "Account"
+            # Note: GL Account comes from the SHIPPING item's configuration in Sage
             
             ET.SubElement(ship_line, "Unit_Price").text = f"{-order.shipping_cost:.2f}"
             ET.SubElement(ship_line, "Tax_Type").text = "1"  # Non-taxable per spec
