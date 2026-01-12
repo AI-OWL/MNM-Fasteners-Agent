@@ -1520,18 +1520,18 @@ class SageSDK:
         # Find column mappings (supports both original format and API format)
         date_col = find_col(['Date of Order', 'Order Date', 'Date'])
         cust_col = find_col(['Customer ID', 'CustomerID', 'Cust ID', 'Platform'])  # API uses 'Platform'
-        name_col = find_col(['Ship to Name', 'ShipToName', 'Customer Name', 'Name'])
-        addr1_col = find_col(['Address Line 1', 'AddressLine1', 'Address1', 'Address', 'Ship To Address'])
-        addr2_col = find_col(['Address Line 2', 'AddressLine2', 'Address2'])
-        city_col = find_col(['City'])
-        state_col = find_col(['State'])
-        zip_col = find_col(['Zipcode', 'Zip', 'ZipCode', 'Postal'])
+        name_col = find_col(['Ship to Name', 'ShipToName', 'Customer Name', 'Name', 'ship_to_name'])
+        addr1_col = find_col(['Address Line 1', 'AddressLine1', 'Address1', 'Address', 'Ship To Address', 'ship_address_1'])
+        addr2_col = find_col(['Address Line 2', 'AddressLine2', 'Address2', 'ship_address_2'])
+        city_col = find_col(['City', 'ship_city'])
+        state_col = find_col(['State', 'ship_state'])
+        zip_col = find_col(['Zipcode', 'Zip', 'ZipCode', 'Postal', 'ship_zip'])
         qty_col = find_col(['Qty', 'Quantity'])
         price_col = find_col(['Unit Price', 'UnitPrice', 'Price'])
         item_col = find_col(['Item ID', 'ItemID', 'SKU', 'Item', 'Product'])  # SKU before Item
         desc_col = find_col(['Description', 'Desc', 'Item Description'])
         amount_col = find_col(['Amount', 'Receivable amount', 'Total', 'Receivable Amount'])
-        phone_col = find_col(['Customer Phone #', 'Customer Phone', 'Phone', 'Phone #', 'Telephone'])
+        phone_col = find_col(['Customer Phone #', 'Customer Phone', 'Phone', 'Phone #', 'Telephone', 'customer_phone'])
         platform_order_col = find_col(['Platform Order ID', 'Platform Order'])  # API's order ID column
         
         logger.info(f"Column mappings: Qty='{qty_col}', Price='{price_col}', Item='{item_col}', Desc='{desc_col}'")
@@ -1570,6 +1570,15 @@ class SageSDK:
         # Get phone number
         customer_phone = get_val(first_row, phone_col)[:20] if phone_col else ''
         
+        # Get address components
+        addr1 = get_val(first_row, addr1_col) if addr1_col else ''
+        addr2 = get_val(first_row, addr2_col) if addr2_col else ''
+        city = get_val(first_row, city_col) if city_col else ''
+        state = get_val(first_row, state_col) if state_col else ''
+        zipcode = get_val(first_row, zip_col) if zip_col else ''
+        
+        logger.debug(f"Address: '{addr1}', '{addr2}', '{city}', '{state}', '{zipcode}'")
+        
         # Create order
         order = Order(
             order_date=order_date,
@@ -1577,11 +1586,11 @@ class SageSDK:
             customer_name=customer_name,
             customer_phone=customer_phone,
             ship_name=customer_name,
-            ship_address_1=get_val(first_row, addr1_col)[:40] if addr1_col else '',
-            ship_address_2=get_val(first_row, addr2_col)[:40] if addr2_col else '',
-            ship_city=get_val(first_row, city_col)[:25] if city_col else '',
-            ship_state=get_val(first_row, state_col)[:2] if state_col else '',
-            ship_postcode=get_val(first_row, zip_col)[:12] if zip_col else '',
+            ship_address_1=addr1[:40] if addr1 else '',
+            ship_address_2=addr2[:40] if addr2 else '',
+            ship_city=city[:25] if city else '',
+            ship_state=state[:2] if state else '',
+            ship_postcode=zipcode[:12] if zipcode else '',
             source_platform=source_platform,
         )
         

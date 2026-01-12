@@ -214,31 +214,31 @@ def import_to_sage(filepath: Path) -> dict:
     """Import the Excel file to Sage 50."""
     logger.info(f"Importing {filepath} to Sage 50...")
     
+    from agent.config import init_config
+    from agent.sage50.sdk_operations import SageSDK, SageSDKError
+    
+    config = init_config()
+    sdk = SageSDK(config)
+    
     try:
-        from agent.config import init_config
-        from agent.sage50.sdk_operations import SageSDK
-        
-        config = init_config()
-        sdk = SageSDK(config)
-        
         logger.info("Connecting to Sage 50...")
         sdk.connect()
-        
-        # Get company name safely
-        company_name = getattr(sdk, '_company_name', None) or "Unknown"
-        logger.info(f"Connected to: {company_name}")
+        logger.info("Connected to Sage 50!")
         
         result = sdk.import_orders_from_excel(str(filepath))
         
-        sdk.disconnect()
-        
         return result
         
+    except SageSDKError as e:
+        logger.error(f"Sage SDK Error: {e}")
+        return {"success": False, "error": str(e)}
     except Exception as e:
         logger.error(f"Failed to import: {e}")
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
+    finally:
+        sdk.disconnect()
 
 
 def preview_excel(filepath: Path, max_rows: int = 10):
