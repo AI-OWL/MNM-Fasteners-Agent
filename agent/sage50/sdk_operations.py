@@ -1095,8 +1095,27 @@ class SageSDK:
                 # Perform import
                 importer.Import()
                 
-                logger.info(f"Successfully imported from {xml_path}")
-                return {"success": True}
+                # Check import results
+                try:
+                    records_imported = importer.get_NumberOfRecordsImported()
+                    records_rejected = importer.get_NumberOfRecordsRejected()
+                    last_error = importer.get_LastErrorMessage()
+                    
+                    logger.info(f"Import results: {records_imported} imported, {records_rejected} rejected")
+                    if last_error:
+                        logger.warning(f"Last error: {last_error}")
+                    
+                    if records_imported > 0:
+                        logger.info(f"Successfully imported {records_imported} records from {xml_path}")
+                        return {"success": True, "records_imported": records_imported}
+                    elif records_rejected > 0:
+                        return {"success": False, "error": f"All {records_rejected} records rejected: {last_error}"}
+                    else:
+                        return {"success": False, "error": f"No records imported. Error: {last_error}"}
+                except Exception as e:
+                    # If we can't get import stats, assume success if no exception from Import()
+                    logger.info(f"Import completed (couldn't get stats: {e})")
+                    return {"success": True}
                 
             else:
                 # Fallback using win32com
@@ -1139,7 +1158,25 @@ class SageSDK:
                 # Import
                 importer.Import()
                 
-                return {"success": True}
+                # Check import results
+                try:
+                    records_imported = importer.NumberOfRecordsImported
+                    records_rejected = importer.NumberOfRecordsRejected
+                    last_error = importer.LastErrorMessage
+                    
+                    logger.info(f"Import results: {records_imported} imported, {records_rejected} rejected")
+                    if last_error:
+                        logger.warning(f"Last error: {last_error}")
+                    
+                    if records_imported > 0:
+                        return {"success": True, "records_imported": records_imported}
+                    elif records_rejected > 0:
+                        return {"success": False, "error": f"All {records_rejected} records rejected: {last_error}"}
+                    else:
+                        return {"success": False, "error": f"No records imported. Error: {last_error}"}
+                except Exception as e:
+                    logger.info(f"Import completed (couldn't get stats: {e})")
+                    return {"success": True}
                 
         except Exception as e:
             logger.error(f"Import failed: {e}")
