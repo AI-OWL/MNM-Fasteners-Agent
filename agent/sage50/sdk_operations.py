@@ -730,7 +730,7 @@ class SageSDK:
             xml_path = self._create_invoice_xml(order, customer_id, invoice_number, use_item_ids)
             
             # Import using SDK
-            result = self._import_sales_journal(xml_path)
+            result = self._import_sales_journal(xml_path, use_item_ids=use_item_ids)
             
             # Clean up temp file
             try:
@@ -973,16 +973,17 @@ class SageSDK:
                 item_id_elem.text = item_id
                 
                 ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
+                # When using Item IDs, Sage gets GL Account from the item - don't specify it
             else:
                 # Simple mode: Include SKU in description (no Item_ID lookup)
                 desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
                 logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
-            
-            # GL Account is always required
-            gl_acct = ET.SubElement(sales_line, "GL_Account")
-            gl_acct.set(f"{{{XSI}}}type", "paw:id")
-            gl_acct.text = sales_account_id
+                
+                # GL Account only needed in simple mode (no item lookup)
+                gl_acct = ET.SubElement(sales_line, "GL_Account")
+                gl_acct.set(f"{{{XSI}}}type", "paw:id")
+                gl_acct.text = sales_account_id
             
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
@@ -1030,7 +1031,7 @@ class SageSDK:
         logger.debug(f"XML content:\n{xml_content}")
         return str(xml_path)
     
-    def _import_sales_journal(self, xml_path: str) -> dict:
+    def _import_sales_journal(self, xml_path: str, use_item_ids: bool = False) -> dict:
         """
         Import sales journal entries from XML file using SDK.
         
@@ -1079,11 +1080,15 @@ class SageSDK:
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Quantity,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ItemId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Description,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_GLAccountId,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_UnitPrice,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_TaxType,
                     PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Amount,
                 ]
+                
+                # Only include GLAccountId in simple mode (when NOT using item IDs)
+                # When using item IDs, Sage gets the GL Account from the item's configuration
+                if not use_item_ids:
+                    fields.insert(17, PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_GLAccountId)
                 
                 for field in fields:
                     importer.AddToImportFieldList(int(field))
@@ -1142,11 +1147,14 @@ class SageSDK:
                     13,  # Quantity
                     14,  # ItemId
                     15,  # Description
-                    16,  # GLAccountId
                     17,  # UnitPrice
                     18,  # TaxType
                     19,  # Amount
                 ]
+                
+                # Only include GLAccountId in simple mode (when NOT using item IDs)
+                if not use_item_ids:
+                    sales_journal_fields.insert(16, 16)  # GLAccountId
                 
                 for field_id in sales_journal_fields:
                     importer.AddToImportFieldList(field_id)
