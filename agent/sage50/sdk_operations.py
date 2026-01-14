@@ -730,7 +730,7 @@ class SageSDK:
             xml_path = self._create_invoice_xml(order, customer_id, invoice_number, use_item_ids)
             
             # Import using SDK
-            result = self._import_sales_journal(xml_path, use_item_ids=use_item_ids)
+            result = self._import_sales_journal(xml_path)
             
             # Clean up temp file
             try:
@@ -952,7 +952,7 @@ class SageSDK:
         # Sales Lines
         sales_lines = ET.SubElement(invoice, "SalesLines")
         
-        # GL Account for sales - configurable, default 4100
+        # GL Account for sales - configurable, default 4000
         sales_account_id = getattr(self.config, 'sage_sales_account', None) or "4000"
         logger.info(f"Using GL accounts - AR: {ar_account_id}, Sales: {sales_account_id}")
         logger.info(f"Order has {len(order.lines)} line items")
@@ -973,17 +973,16 @@ class SageSDK:
                 item_id_elem.text = item_id
                 
                 ET.SubElement(sales_line, "Description").text = (line.description or "")[:160]
-                # When using Item IDs, Sage gets GL Account from the item - don't specify it
             else:
                 # Simple mode: Include SKU in description (no Item_ID lookup)
                 desc_with_sku = f"{line.sku}: {line.description}" if line.sku else line.description
                 ET.SubElement(sales_line, "Description").text = (desc_with_sku or "Sale")[:160]
                 logger.debug(f"  Simple mode - no Item_ID, desc: {desc_with_sku[:50]}")
-                
-                # GL Account only needed in simple mode (no item lookup)
-                gl_acct = ET.SubElement(sales_line, "GL_Account")
-                gl_acct.set(f"{{{XSI}}}type", "paw:id")
-                gl_acct.text = sales_account_id
+            
+            # GL Account - always include with value 4000
+            gl_acct = ET.SubElement(sales_line, "GL_Account")
+            gl_acct.set(f"{{{XSI}}}type", "paw:id")
+            gl_acct.text = sales_account_id
             
             # Unit Price (NEGATIVE for sales)
             ET.SubElement(sales_line, "Unit_Price").text = f"{-line.unit_price:.2f}"
@@ -1031,7 +1030,7 @@ class SageSDK:
         logger.debug(f"XML content:\n{xml_content}")
         return str(xml_path)
     
-    def _import_sales_journal(self, xml_path: str, use_item_ids: bool = False) -> dict:
+    def _import_sales_journal(self, xml_path: str) -> dict:
         """
         Import sales journal entries from XML file using SDK.
         
@@ -1058,40 +1057,8 @@ class SageSDK:
                 if not importer:
                     return {"success": False, "error": "Failed to create importer"}
                 
-                # Clear and set up field list
-                importer.ClearImportFieldList()
-                
-                # Add fields to import (from C# sample)
-                fields = [
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerId,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_CustomerName,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Date,
-                    # InvoiceNumber removed - let Sage auto-generate
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToName,  # Ship To Name
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToAddressLine1,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToAddressLine2,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToCity,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToState,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ShipToZip,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ARAccountId,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ARAmount,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_IsCreditMemo,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_NumberOfDistributions,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Quantity,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_ItemId,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Description,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_UnitPrice,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_TaxType,
-                    PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_Amount,
-                ]
-                
-                # Only include GLAccountId in simple mode (when NOT using item IDs)
-                # When using item IDs, Sage gets the GL Account from the item's configuration
-                if not use_item_ids:
-                    fields.insert(17, PeachwIEObjSalesJournalField.peachwIEObjSalesJournalField_GLAccountId)
-                
-                for field in fields:
-                    importer.AddToImportFieldList(int(field))
+                # Don't specify field list - let Sage auto-detect from XML
+                # This works better than manually specifying fields
                 
                 # Set file info
                 importer.SetFilename(xml_path)
@@ -1127,37 +1094,7 @@ class SageSDK:
                 # Create importer - PeachwIEObj.peachwIEObjSalesJournal = 0
                 importer = self._company.CreateImporter(0)  # 0 = SalesJournal
                 
-                importer.ClearImportFieldList()
-                
-                # Field IDs from Sage SDK documentation
-                sales_journal_fields = [
-                    0,   # CustomerId
-                    1,   # CustomerName
-                    2,   # Date
-                    # 3 = InvoiceNumber - removed, let Sage auto-generate
-                    4,   # ShipToAddressLine1
-                    5,   # ShipToAddressLine2
-                    6,   # ShipToCity
-                    7,   # ShipToState
-                    8,   # ShipToZip
-                    9,   # ARAccountId
-                    10,  # ARAmount
-                    11,  # IsCreditMemo
-                    12,  # NumberOfDistributions
-                    13,  # Quantity
-                    14,  # ItemId
-                    15,  # Description
-                    17,  # UnitPrice
-                    18,  # TaxType
-                    19,  # Amount
-                ]
-                
-                # Only include GLAccountId in simple mode (when NOT using item IDs)
-                if not use_item_ids:
-                    sales_journal_fields.insert(16, 16)  # GLAccountId
-                
-                for field_id in sales_journal_fields:
-                    importer.AddToImportFieldList(field_id)
+                # Don't specify field list - let Sage auto-detect from XML
                 
                 # Set file info - peachwIEFileTypeXML = 1
                 importer.SetFilename(xml_path)
